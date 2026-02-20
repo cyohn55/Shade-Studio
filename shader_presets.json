@@ -1,0 +1,229 @@
+{
+  "Comic - 1": {
+    "base_shader": "Comic Book",
+    "params": {
+      "dot_size": 5.5280000000000005,
+      "dot_angle": 0.6955100000000001,
+      "dot_softness": 0.01,
+      "outline_thickness": 0.965,
+      "outline_threshold": 0.15,
+      "outline_softness": 0.2727,
+      "color_levels": 9.224,
+      "color_strength": 1.0,
+      "saturation": 1.308,
+      "ink_density": 0.845,
+      "paper_white": 0.95,
+      "cmyk_mode": 0.0
+    }
+  },
+  "Toon -1": {
+    "base_shader": "Toon Shader",
+    "params": {
+      "color_bands": 6.37,
+      "edge_thickness": 1.25,
+      "edge_threshold": 0.45688,
+      "edge_softness": 0.0956,
+      "saturation_boost": 1.602,
+      "brightness_boost": 0.17400000000000004,
+      "shadow_intensity": 0.396,
+      "highlight_intensity": 0.2,
+      "outline_color_r": 0.0,
+      "outline_color_g": 0.0,
+      "outline_color_b": 0.0,
+      "quantize_hue": 0.0
+    }
+  },
+  "Posterize -1": {
+    "base_shader": "Posterize",
+    "params": {
+      "levels": 7.155308316670677,
+      "saturation": 1.9079691447954104,
+      "outline": 0.5465887519760989,
+      "outline_thickness": 0.549,
+      "smooth_edges": 0.19774147218029048
+    }
+  },
+  "Thermal - 1": {
+    "base_shader": "Thermal",
+    "params": {
+      "sensitivity": 1.7795,
+      "cold_threshold": 0.11768713151027299,
+      "hot_threshold": 0.9030374676693131,
+      "color_mode": 0.4456514667357834,
+      "noise": 0.16720000000000002
+    }
+  },
+  "Night Vision - 1": {
+    "base_shader": "Night Vision",
+    "params": {
+      "brightness": 2.5,
+      "noise": 0.15,
+      "scanlines": 0.3,
+      "vignette": 1.2,
+      "green_tint": 0.8,
+      "flicker": 0.05
+    }
+  },
+  "ASCII - 1": {
+    "base_shader": "ASCII Art",
+    "params": {
+      "cell_size": 4.944,
+      "char_brightness": 1.0,
+      "bg_color_r": 0.0,
+      "bg_color_g": 0.0,
+      "bg_color_b": 0.0,
+      "text_color_r": 0.0,
+      "text_color_g": 1.0,
+      "text_color_b": 0.0,
+      "colored": 0.0
+    }
+  },
+  "Film Grain - 1": {
+    "base_shader": "Film Grain",
+    "params": {
+      "grain_amount": 0.3,
+      "grain_size": 1.0,
+      "grain_color": 0.0,
+      "scratches": 0.1,
+      "dust": 0.05,
+      "vignette": 0.3,
+      "flicker": 0.02,
+      "saturation": 0.9059999999999999,
+      "contrast": 1.1
+    }
+  },
+  "CRT - 1": {
+    "base_shader": "CRT Monitor",
+    "params": {
+      "scanline_intensity": 0.8156154661118349,
+      "scanline_count": 301.4058066562138,
+      "curvature": 0.1573399570066502,
+      "vignette": 0.2812756071839453,
+      "brightness": 0.9707380843617373,
+      "saturation": 1.298,
+      "rgb_offset": 3.1918978187697378,
+      "flicker": 0.037373825914558755,
+      "noise": 0.10198151777123987,
+      "glow": 0.9030270036046936
+    }
+  },
+  "Dithering - 1": {
+    "base_shader": "Dithering (Retro)",
+    "params": {
+      "dither_size": 4.0,
+      "color_levels": 4.0,
+      "pattern_type": 0.0,
+      "contrast": 1.4015,
+      "monochrome": 0.0
+    }
+  },
+  "VHS - 1": {
+    "base_shader": "VHS Tape",
+    "params": {
+      "scan_intensity": 0.639,
+      "noise_amount": 0.0,
+      "color_bleed": 7.638208010120043,
+      "tracking_error": 0.0017657325770275012,
+      "tape_crease": 0.282,
+      "head_switching": 0.087,
+      "saturation_loss": 0.0,
+      "time": 79.20340262905793
+    }
+  },
+  "Color Ramp - 1": {
+    "base_shader": "Color Ramp",
+    "params": {
+      "color1_r": 0.0,
+      "color1_g": 0.0,
+      "color1_b": 0.2,
+      "color2_r": 0.5,
+      "color2_g": 0.0,
+      "color2_b": 0.5,
+      "color3_r": 1.0,
+      "color3_g": 0.5,
+      "color3_b": 0.0,
+      "color4_r": 1.0,
+      "color4_g": 1.0,
+      "color4_b": 0.8,
+      "pos2": 0.33,
+      "pos3": 0.66,
+      "blend_original": 0.0
+    }
+  },
+  "RGB Curves - 1": {
+    "base_shader": "RGB Curves",
+    "params": {
+      "r_black": 0.5926012062936675,
+      "r_white": 0.7852683385693866,
+      "r_lift": 0.21689091377504577,
+      "r_gamma": 2.7483805228994918,
+      "g_black": 0.010887149297429954,
+      "g_white": 0.8030113698567751,
+      "g_lift": 0.47090682682879415,
+      "g_gamma": 2.076741005994987,
+      "b_black": 0.840605331442051,
+      "b_white": 0.4458145743292351,
+      "b_lift": -0.002102801069492788,
+      "b_gamma": 1.69237023574206
+    }
+  },
+  "Screen Space AO - 1": {
+    "base_shader": "Screen Space AO",
+    "params": {
+      "radius": 2.730320964289337,
+      "strength": 2.8893202590244353,
+      "samples": 6.802358081040188,
+      "falloff": 0.7713818550708574,
+      "only_ao": 0.7871310941036993
+    }
+  },
+  "X-Ray - 1": {
+    "base_shader": "X-Ray",
+    "params": {
+      "edge_strength": 2.0220000000000002,
+      "fill_opacity": 0.397,
+      "color_r": 0.3,
+      "color_g": 0.6,
+      "color_b": 1.0,
+      "invert": 0.0
+    }
+  },
+  "Toon Shader - 2": {
+    "base_shader": "Toon Shader",
+    "params": {
+      "color_bands": 6.37,
+      "edge_thickness": 1.25,
+      "edge_threshold": 0.18101,
+      "edge_softness": 0.16720000000000002,
+      "saturation_boost": 3.0,
+      "brightness_boost": 0.18600000000000005,
+      "shadow_intensity": 0.396,
+      "highlight_intensity": 0.2,
+      "outline_color_r": 0.0,
+      "outline_color_g": 0.0,
+      "outline_color_b": 0.0,
+      "quantize_hue": 0.0
+    }
+  },
+  "Toon Pixel - 1": {
+    "base_shader": "Pixelation",
+    "params": {
+      "pixel_size": 3.1420000000000003,
+      "color_depth": 32.0,
+      "dither_amount": 0.0,
+      "saturation_boost": 1.0,
+      "outline_strength": 0.0,
+      "outline_threshold": 0.1
+    }
+  },
+  "Dithering - 2": {
+    "base_shader": "Dithering (Retro)",
+    "params": {
+      "dither_size": 6.61,
+      "color_levels": 9.252,
+      "pattern_type": 3.0,
+      "contrast": 1.0,
+      "monochrome": 0.0
+    }
+  }
+}

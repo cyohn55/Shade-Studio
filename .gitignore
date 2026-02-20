@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Build artifacts
+build/
+dist/
+*.spec.bak
+
+# Logs & debug
+crash_log.txt
+output.log
+debug_output.txt
+layer_debug.txt
+
+# Image outputs (keep inputs)
+*.png
+toon_pngs/
+pixelated_pngs/
+
+# Backup files
+*.bak
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+.DS_Store
+
+# Claude session data (not project config)
+.claude/shell-snapshots/
+.claude/stats-cache.json
+.claude/debug/
+.claude/todos/

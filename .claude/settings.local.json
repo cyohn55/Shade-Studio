@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c:*)",
+      "Bash(timeout 5 python:*)",
+      "Bash(python:*)",
+      "Bash(pip show:*)",
+      "Bash(pip install:*)",
+      "Bash(\"C:\\\\Users\\\\cyohn\\\\AppData\\\\Roaming\\\\Python\\\\Python312\\\\Scripts\\\\pyinstaller.exe\" --clean shade_studio.spec)",
+      "Bash(copy \"C:\\\\Users\\\\cyohn\\\\Desktop\\\\Portfolio\\\\Blender Experiments\\\\dist\\\\Shade Studio.exe\" \"C:\\\\Users\\\\cyohn\\\\Desktop\\\\Shade Studio.exe\")",
+      "Bash(dir \"C:\\\\Users\\\\cyohn\\\\Desktop\\\\Shade Studio.exe\")",
+      "Bash(pyinstaller:*)",
+      "Bash(taskkill:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(timeout:*)",
+      "Bash(tasklist:*)",
+      "Bash(findstr:*)",
+      "Bash(start cmd /k \"python shader_studio_v2.py\")",
+      "Bash(start python shader_studio_v2.py:*)",
+      "Bash(dir:*)",
+      "Bash(git init:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}
