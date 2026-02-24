@@ -468,6 +468,9 @@ SHADERS = {
             "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
             "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
             "exposure": {"min": -3.0, "max": 3.0, "default": 0.0, "step": 0.05},
+        
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -479,6 +482,8 @@ SHADERS = {
             uniform float exposure;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec4 color = texture(u_texture, v_uv);
@@ -500,7 +505,28 @@ SHADERS = {
                 color.rgb = pow(max(color.rgb, vec3(0.0)), vec3(1.0 / gamma));
 
                 f_color = vec4(clamp(color.rgb, 0.0, 1.0), color.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -514,6 +540,13 @@ SHADERS = {
             "saturation_boost": {"min": 0.5, "max": 2.0, "default": 1.0, "step": 0.05},
             "outline_strength": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.05},
             "outline_threshold": {"min": 0.01, "max": 0.5, "default": 0.1, "step": 0.01},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -547,6 +580,12 @@ SHADERS = {
             float luminance(vec3 c) {
                 return dot(c, vec3(0.299, 0.587, 0.114));
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 tex_size = vec2(textureSize(u_texture, 0));
@@ -584,7 +623,33 @@ SHADERS = {
                 }
 
                 f_color = color;
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -603,6 +668,13 @@ SHADERS = {
             "stroke_color_g": {"min": 0.0, "max": 1.0, "default": 0.1, "step": 0.05},
             "stroke_color_b": {"min": 0.0, "max": 1.0, "default": 0.1, "step": 0.05},
             "color_variation": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.05},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -639,6 +711,12 @@ SHADERS = {
             float luminance(vec3 c) {
                 return dot(c, vec3(0.299, 0.587, 0.114));
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 tex_size = vec2(textureSize(u_texture, 0));
@@ -690,7 +768,33 @@ SHADERS = {
                 final_color *= paper;
 
                 f_color = vec4(final_color, base_color.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -710,6 +814,13 @@ SHADERS = {
             "outline_color_g": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.05},
             "outline_color_b": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.05},
             "quantize_hue": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 1.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -747,6 +858,12 @@ SHADERS = {
                 vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
                 return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 tex_size = vec2(textureSize(u_texture, 0));
@@ -800,7 +917,33 @@ SHADERS = {
                 vec3 final_color = mix(quantized, outline_color, edge_mask);
 
                 f_color = vec4(final_color, base.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -820,6 +963,12 @@ SHADERS = {
             "ink_density": {"min": 0.0, "max": 1.0, "default": 0.9, "step": 0.05},
             "paper_white": {"min": 0.8, "max": 1.0, "default": 0.95, "step": 0.01},
             "cmyk_mode": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 1.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -852,6 +1001,11 @@ SHADERS = {
                 float radius = (1.0 - value) * 0.5;
                 return smoothstep(radius - dot_softness, radius + dot_softness, dist);
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 tex_size = vec2(textureSize(u_texture, 0));
@@ -900,7 +1054,31 @@ SHADERS = {
                 color = mix(color, vec3(0.0), edge_mask * ink_density);
 
                 f_color = vec4(color, base.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -920,6 +1098,13 @@ SHADERS = {
             "bg_color_g": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.05},
             "bg_color_b": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.05},
             "show_direction": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 1.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -942,6 +1127,12 @@ SHADERS = {
             float luminance(vec3 c) {
                 return dot(c, vec3(0.299, 0.587, 0.114));
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 tex_size = vec2(textureSize(u_texture, 0));
@@ -985,7 +1176,33 @@ SHADERS = {
                 }
 
                 f_color = vec4(color, base.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -1007,6 +1224,9 @@ SHADERS = {
             "gain_r": {"min": 0.5, "max": 1.5, "default": 1.0, "step": 0.02},
             "gain_g": {"min": 0.5, "max": 1.5, "default": 1.0, "step": 0.02},
             "gain_b": {"min": 0.5, "max": 1.5, "default": 1.0, "step": 0.02},
+        
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -1023,6 +1243,8 @@ SHADERS = {
             uniform float gain_r, gain_g, gain_b;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec4 color = texture(u_texture, v_uv);
@@ -1064,7 +1286,28 @@ SHADERS = {
                 color.rgb = pow(max(color.rgb, vec3(0.0)), vec3(1.0 / gamma));
 
                 f_color = vec4(clamp(color.rgb, 0.0, 1.0), color.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -1082,6 +1325,11 @@ SHADERS = {
             "contrast": {"min": 0.5, "max": 2.0, "default": 1.1, "step": 0.02},
             "grain": {"min": 0.0, "max": 0.3, "default": 0.05, "step": 0.01},
             "vignette": {"min": 0.0, "max": 1.0, "default": 0.3, "step": 0.02},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -1098,6 +1346,10 @@ SHADERS = {
             float hash(vec2 p) {
                 return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
             }
+            uniform float brightness;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
 
             void main() {
                 vec4 color = texture(u_texture, v_uv);
@@ -1131,7 +1383,27 @@ SHADERS = {
                 }
 
                 f_color = vec4(clamp(result, 0.0, 1.0), color.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -1149,6 +1421,13 @@ SHADERS = {
             "color_g": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.02},
             "color_b": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.02},
             "highlight_boost": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.02},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -1163,6 +1442,12 @@ SHADERS = {
             uniform float highlight_boost;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec4 color = texture(u_texture, v_uv);
@@ -1190,7 +1475,33 @@ SHADERS = {
                 }
 
                 f_color = vec4(clamp(result, 0.0, 1.0), color.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -1207,6 +1518,13 @@ SHADERS = {
             "blue_offset": {"min": -2.0, "max": 2.0, "default": -1.0, "step": 0.1},
             "barrel_distortion": {"min": -0.5, "max": 0.5, "default": 0.0, "step": 0.02},
             "blur_edges": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.05},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -1227,6 +1545,12 @@ SHADERS = {
                 float f = 1.0 + k * r * r;
                 return center + diff * f;
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 center = vec2(center_x, center_y);
@@ -1267,7 +1591,33 @@ SHADERS = {
                 }
 
                 f_color = vec4(color, a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -1282,6 +1632,13 @@ SHADERS = {
             "noise": {"min": 0.0, "max": 1.0, "default": 0.1, "step": 0.02},
             "vertical_shift": {"min": 0.0, "max": 0.1, "default": 0.0, "step": 0.005},
             "seed": {"min": 0.0, "max": 100.0, "default": 42.0, "step": 1.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -1299,6 +1656,12 @@ SHADERS = {
             float hash(vec2 p) {
                 return fract(sin(dot(p + seed * 0.01, vec2(127.1, 311.7))) * 43758.5453);
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 tex_size = vec2(textureSize(u_texture, 0));
@@ -1339,7 +1702,33 @@ SHADERS = {
 
                 float a = texture(u_texture, v_uv).a;
                 f_color = vec4(clamp(color, 0.0, 1.0), a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -1350,6 +1739,13 @@ SHADERS = {
             "amount": {"min": 0.0, "max": 5.0, "default": 1.0, "step": 0.1},
             "radius": {"min": 0.5, "max": 5.0, "default": 1.0, "step": 0.1},
             "threshold": {"min": 0.0, "max": 0.5, "default": 0.0, "step": 0.01},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -1359,6 +1755,12 @@ SHADERS = {
             uniform float threshold;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 tex_size = vec2(textureSize(u_texture, 0));
@@ -1387,7 +1789,33 @@ SHADERS = {
                 }
 
                 f_color = vec4(clamp(center.rgb, 0.0, 1.0), center.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -1399,6 +1827,13 @@ SHADERS = {
             "quality": {"min": 1.0, "max": 3.0, "default": 2.0, "step": 1.0},
             "directional": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 1.0},
             "direction_angle": {"min": 0.0, "max": 6.28, "default": 0.0, "step": 0.1},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -1409,6 +1844,12 @@ SHADERS = {
             uniform float direction_angle;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 tex_size = vec2(textureSize(u_texture, 0));
@@ -1441,7 +1882,33 @@ SHADERS = {
                 }
 
                 f_color = color / total;
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -1453,6 +1920,12 @@ SHADERS = {
             "sharpness": {"min": 1.0, "max": 20.0, "default": 8.0, "step": 0.5},
             "color_levels": {"min": 2.0, "max": 32.0, "default": 8.0, "step": 1.0},
             "saturation": {"min": 0.5, "max": 2.0, "default": 1.2, "step": 0.05},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -1463,6 +1936,11 @@ SHADERS = {
             uniform float saturation;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 tex_size = vec2(textureSize(u_texture, 0));
@@ -1517,7 +1995,31 @@ SHADERS = {
 
                 vec4 base = texture(u_texture, v_uv);
                 f_color = vec4(color, base.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -1532,6 +2034,13 @@ SHADERS = {
             "granulation": {"min": 0.0, "max": 1.0, "default": 0.3, "step": 0.02},
             "color_variance": {"min": 0.0, "max": 0.5, "default": 0.1, "step": 0.02},
             "wetness": {"min": 0.0, "max": 1.0, "default": 0.5, "step": 0.02},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -1564,6 +2073,12 @@ SHADERS = {
             float luminance(vec3 c) {
                 return dot(c, vec3(0.299, 0.587, 0.114));
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 tex_size = vec2(textureSize(u_texture, 0));
@@ -1626,7 +2141,33 @@ SHADERS = {
                 color = mix(color, vec3(1.0), 0.05 * wetness);
 
                 f_color = vec4(clamp(color, 0.0, 1.0), base.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -1641,6 +2182,11 @@ SHADERS = {
             "vignette_radius": {"min": 0.3, "max": 1.5, "default": 0.8, "step": 0.05},
             "shadow_crush": {"min": 0.0, "max": 0.3, "default": 0.1, "step": 0.01},
             "highlight_bloom": {"min": 0.0, "max": 1.0, "default": 0.2, "step": 0.02},
+        
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -1658,6 +2204,10 @@ SHADERS = {
             float hash(vec2 p) {
                 return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
             }
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec4 color = texture(u_texture, v_uv);
@@ -1687,7 +2237,31 @@ SHADERS = {
                 lum *= mix(1.0 - vignette_strength, 1.0, vig);
 
                 f_color = vec4(vec3(clamp(lum, 0.0, 1.0)), color.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -1703,6 +2277,12 @@ SHADERS = {
             "glow_intensity": {"min": 0.0, "max": 1.0, "default": 0.4, "step": 0.02},
             "scanlines": {"min": 0.0, "max": 1.0, "default": 0.2, "step": 0.02},
             "chromatic_aberration": {"min": 0.0, "max": 0.02, "default": 0.003, "step": 0.001},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -1717,6 +2297,11 @@ SHADERS = {
             uniform float chromatic_aberration;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 tex_size = vec2(textureSize(u_texture, 0));
@@ -1754,7 +2339,32 @@ SHADERS = {
                 }
 
                 f_color = vec4(clamp(color, 0.0, 1.0), texture(u_texture, v_uv).a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -1770,6 +2380,11 @@ SHADERS = {
             "scratches": {"min": 0.0, "max": 1.0, "default": 0.3, "step": 0.02},
             "flicker": {"min": 0.0, "max": 0.2, "default": 0.05, "step": 0.01},
             "saturation": {"min": 0.0, "max": 1.5, "default": 0.7, "step": 0.02},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -1796,6 +2411,10 @@ SHADERS = {
                 return mix(mix(hash(i), hash(i + vec2(1,0)), f.x),
                            mix(hash(i + vec2(0,1)), hash(i + vec2(1,1)), f.x), f.y);
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float gamma;
+            uniform float hue_shift;
 
             void main() {
                 vec4 base = texture(u_texture, v_uv);
@@ -1835,7 +2454,26 @@ SHADERS = {
                 color *= 1.0 - dist * dist * vignette;
 
                 f_color = vec4(clamp(color, 0.0, 1.0), base.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -1849,6 +2487,11 @@ SHADERS = {
             "cyan_red": {"min": -1.0, "max": 1.0, "default": 0.2, "step": 0.02},
             "magenta_green": {"min": -1.0, "max": 1.0, "default": -0.1, "step": 0.02},
             "yellow_blue": {"min": -1.0, "max": 1.0, "default": 0.3, "step": 0.02},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -1861,6 +2504,10 @@ SHADERS = {
             uniform float yellow_blue;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec4 base = texture(u_texture, v_uv);
@@ -1887,7 +2534,30 @@ SHADERS = {
                 color = mix(base.rgb, color, intensity);
 
                 f_color = vec4(clamp(color, 0.0, 1.0), base.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -1900,6 +2570,12 @@ SHADERS = {
             "outline": {"min": 0.0, "max": 1.0, "default": 0.5, "step": 0.02},
             "outline_thickness": {"min": 0.5, "max": 4.0, "default": 1.5, "step": 0.1},
             "smooth_edges": {"min": 0.0, "max": 1.0, "default": 0.3, "step": 0.02},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -1915,6 +2591,11 @@ SHADERS = {
             float luminance(vec3 c) {
                 return dot(c, vec3(0.299, 0.587, 0.114));
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 tex_size = vec2(textureSize(u_texture, 0));
@@ -1952,7 +2633,31 @@ SHADERS = {
                 }
 
                 f_color = vec4(color, base.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -1965,6 +2670,13 @@ SHADERS = {
             "hot_threshold": {"min": 0.5, "max": 1.0, "default": 0.75, "step": 0.02},
             "color_mode": {"min": 0.0, "max": 2.0, "default": 0.0, "step": 1.0},
             "noise": {"min": 0.0, "max": 0.2, "default": 0.05, "step": 0.01},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -1997,6 +2709,12 @@ SHADERS = {
                     sin(t * 6.28 + 4.19) * 0.5 + 0.5
                 );
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec4 base = texture(u_texture, v_uv);
@@ -2021,7 +2739,33 @@ SHADERS = {
                 }
 
                 f_color = vec4(color, base.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -2033,6 +2777,13 @@ SHADERS = {
             "angle": {"min": 0.0, "max": 6.28, "default": 0.785, "step": 0.1},
             "blend": {"min": 0.0, "max": 1.0, "default": 0.5, "step": 0.02},
             "gray_base": {"min": 0.3, "max": 0.7, "default": 0.5, "step": 0.02},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -2047,6 +2798,12 @@ SHADERS = {
             float luminance(vec3 c) {
                 return dot(c, vec3(0.299, 0.587, 0.114));
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 tex_size = vec2(textureSize(u_texture, 0));
@@ -2063,7 +2820,33 @@ SHADERS = {
                 vec3 color = mix(vec3(emboss), base.rgb * emboss * 2.0, blend);
 
                 f_color = vec4(clamp(color, 0.0, 1.0), base.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -2078,6 +2861,13 @@ SHADERS = {
             "edge_color_b": {"min": 0.0, "max": 1.0, "default": 0.1, "step": 0.02},
             "randomness": {"min": 0.0, "max": 1.0, "default": 0.3, "step": 0.02},
             "color_variation": {"min": 0.0, "max": 0.5, "default": 0.1, "step": 0.02},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -2096,6 +2886,12 @@ SHADERS = {
                 p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
                 return fract(sin(p) * 43758.5453);
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 tex_size = vec2(textureSize(u_texture, 0));
@@ -2135,7 +2931,33 @@ SHADERS = {
                 color = mix(edge_col, color, edge);
 
                 f_color = vec4(clamp(color, 0.0, 1.0), texture(u_texture, v_uv).a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -2154,6 +2976,13 @@ SHADERS = {
             "ink_color_r": {"min": 0.0, "max": 0.3, "default": 0.1, "step": 0.02},
             "ink_color_g": {"min": 0.0, "max": 0.3, "default": 0.08, "step": 0.02},
             "ink_color_b": {"min": 0.0, "max": 0.3, "default": 0.05, "step": 0.02},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -2174,6 +3003,12 @@ SHADERS = {
                 vec2 rotated = vec2(uv.x * c - uv.y * s, uv.x * s + uv.y * c);
                 return smoothstep(thickness, thickness * 0.5, abs(sin(rotated.x * density)));
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec4 base = texture(u_texture, v_uv);
@@ -2207,7 +3042,33 @@ SHADERS = {
                 vec3 color = mix(paper, ink, lines);
 
                 f_color = vec4(color, base.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -2223,6 +3084,12 @@ SHADERS = {
             "paper_color_r": {"min": 0.8, "max": 1.0, "default": 1.0, "step": 0.02},
             "paper_color_g": {"min": 0.8, "max": 1.0, "default": 0.98, "step": 0.02},
             "paper_color_b": {"min": 0.8, "max": 1.0, "default": 0.95, "step": 0.02},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -2257,6 +3124,11 @@ SHADERS = {
                 float radius = (1.0 - value) * 0.5;
                 return smoothstep(radius - 0.02, radius + 0.02, dist);
             }
+            uniform float brightness;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec4 base = texture(u_texture, v_uv);
@@ -2284,7 +3156,32 @@ SHADERS = {
                 }
 
                 f_color = vec4(result, base.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -2298,6 +3195,11 @@ SHADERS = {
             "vignette": {"min": 0.0, "max": 2.0, "default": 1.2, "step": 0.05},
             "green_tint": {"min": 0.5, "max": 1.0, "default": 0.8, "step": 0.02},
             "flicker": {"min": 0.0, "max": 0.2, "default": 0.05, "step": 0.01},
+        
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -2314,6 +3216,10 @@ SHADERS = {
             float hash(vec2 p) {
                 return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
             }
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
 
             void main() {
                 vec4 base = texture(u_texture, v_uv);
@@ -2344,7 +3250,27 @@ SHADERS = {
                 color *= 1.0 + (hash(vec2(floor(v_uv.y * 5.0), 1.0)) - 0.5) * flicker;
 
                 f_color = vec4(clamp(color, 0.0, 1.0), base.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -2360,6 +3286,12 @@ SHADERS = {
             "tint_r": {"min": 0.8, "max": 1.2, "default": 1.0, "step": 0.02},
             "tint_g": {"min": 0.8, "max": 1.2, "default": 1.0, "step": 0.02},
             "tint_b": {"min": 0.8, "max": 1.2, "default": 1.05, "step": 0.02},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -2372,6 +3304,11 @@ SHADERS = {
             uniform float tint_r, tint_g, tint_b;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 tex_size = vec2(textureSize(u_texture, 0));
@@ -2427,7 +3364,31 @@ SHADERS = {
                 color *= vec3(tint_r, tint_g, tint_b);
 
                 f_color = vec4(clamp(color, 0.0, 1.0), base.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -2441,6 +3402,13 @@ SHADERS = {
             "color_shift_g": {"min": -0.5, "max": 0.5, "default": 0.0, "step": 0.02},
             "color_shift_b": {"min": -0.5, "max": 0.5, "default": 0.0, "step": 0.02},
             "orange_mask": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.02},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -2451,6 +3419,12 @@ SHADERS = {
             uniform float orange_mask;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec4 base = texture(u_texture, v_uv);
@@ -2480,7 +3454,33 @@ SHADERS = {
                 }
 
                 f_color = vec4(clamp(color, 0.0, 1.0), base.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -2494,6 +3494,13 @@ SHADERS = {
             "highlight_saturation": {"min": 0.0, "max": 1.0, "default": 0.2, "step": 0.02},
             "balance": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.02},
             "blend": {"min": 0.0, "max": 1.0, "default": 0.5, "step": 0.02},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -2511,6 +3518,12 @@ SHADERS = {
                 vec3 rgb = clamp(abs(mod(hsl.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
                 return hsl.z + hsl.y * (rgb - 0.5) * (1.0 - abs(2.0 * hsl.z - 1.0));
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec4 base = texture(u_texture, v_uv);
@@ -2534,7 +3547,33 @@ SHADERS = {
                 color = mix(color, tinted, blend);
 
                 f_color = vec4(clamp(color, 0.0, 1.0), base.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -2551,6 +3590,13 @@ SHADERS = {
             "text_color_g": {"min": 0.5, "max": 1.0, "default": 1.0, "step": 0.02},
             "text_color_b": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.02},
             "colored": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 1.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -2586,6 +3632,12 @@ SHADERS = {
 
                 return density;
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 tex_size = vec2(textureSize(u_texture, 0));
@@ -2609,7 +3661,33 @@ SHADERS = {
                 vec3 color = mix(bg, fg, pattern);
 
                 f_color = vec4(color, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -2623,6 +3701,11 @@ SHADERS = {
             "bloom_softness": {"min": 0.0, "max": 1.0, "default": 0.5, "step": 0.05},
             "saturation": {"min": 0.0, "max": 2.0, "default": 1.0, "step": 0.05},
             "brightness": {"min": -0.5, "max": 0.5, "default": 0.0, "step": 0.02},
+        
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -2659,6 +3742,10 @@ SHADERS = {
                 }
                 return bloom / max(total, 1.0);
             }
+            uniform float contrast;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec4 base = texture(u_texture, v_uv);
@@ -2671,7 +3758,30 @@ SHADERS = {
 
                 color += brightness;
                 f_color = vec4(clamp(color, 0.0, 1.0), base.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -2685,6 +3795,12 @@ SHADERS = {
             "blur_quality": {"min": 1.0, "max": 3.0, "default": 2.0, "step": 1.0},
             "bokeh_shape": {"min": 0.0, "max": 1.0, "default": 0.5, "step": 0.1},
             "brightness": {"min": -0.5, "max": 0.5, "default": 0.0, "step": 0.02},
+        
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -2697,6 +3813,11 @@ SHADERS = {
             uniform float brightness;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 tex_size = vec2(textureSize(u_texture, 0));
@@ -2737,7 +3858,32 @@ SHADERS = {
 
                 color = color / max(total, 1.0);
                 f_color = vec4(color + brightness, center.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -2754,6 +3900,10 @@ SHADERS = {
             "flicker": {"min": 0.0, "max": 0.2, "default": 0.02, "step": 0.01},
             "saturation": {"min": 0.0, "max": 1.5, "default": 0.9, "step": 0.05},
             "contrast": {"min": 0.5, "max": 1.5, "default": 1.1, "step": 0.05},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -2781,6 +3931,9 @@ SHADERS = {
                 return mix(mix(hash(i), hash(i + vec2(1,0)), f.x),
                            mix(hash(i + vec2(0,1)), hash(i + vec2(1,1)), f.x), f.y);
             }
+            uniform float brightness;
+            uniform float gamma;
+            uniform float hue_shift;
 
             void main() {
                 vec4 base = texture(u_texture, v_uv);
@@ -2829,7 +3982,25 @@ SHADERS = {
                 color = (color - 0.5) * contrast + 0.5;
 
                 f_color = vec4(clamp(color, 0.0, 1.0), base.a);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -2847,6 +4018,10 @@ SHADERS = {
             "flicker": {"min": 0.0, "max": 0.1, "default": 0.02, "step": 0.005},
             "noise": {"min": 0.0, "max": 0.2, "default": 0.05, "step": 0.01},
             "glow": {"min": 0.0, "max": 1.0, "default": 0.2, "step": 0.05},
+        
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -2875,6 +4050,9 @@ SHADERS = {
                 uv = uv * 0.5 + 0.5;
                 return uv;
             }
+            uniform float contrast;
+            uniform float gamma;
+            uniform float hue_shift;
 
             void main() {
                 vec2 curved_uv = curve(v_uv);
@@ -2929,7 +4107,25 @@ SHADERS = {
                 color *= vig;
 
                 f_color = vec4(clamp(color, 0.0, 1.0), 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 
@@ -2942,6 +4138,13 @@ SHADERS = {
             "blur_samples": {"min": 3.0, "max": 20.0, "default": 10.0, "step": 1.0},
             "center_focus": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.05},
             "radial_blur": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.05},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -2953,6 +4156,12 @@ SHADERS = {
             uniform float radial_blur;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 tex_size = vec2(textureSize(u_texture, 0));
@@ -2985,7 +4194,33 @@ SHADERS = {
                 }
 
                 f_color = vec4(color / total, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "PBR (Physically Based)": {
@@ -2996,6 +4231,13 @@ SHADERS = {
             "light_intensity": {"type": "float", "default": 1.0, "min": 0.0, "max": 5.0},
             "environment_strength": {"type": "float", "default": 0.3, "min": 0.0, "max": 1.0},
             "fresnel_power": {"type": "float", "default": 5.0, "min": 1.0, "max": 10.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -3044,6 +4286,12 @@ SHADERS = {
             vec3 fresnelSchlick(float cosTheta, vec3 F0) {
                 return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), fresnel_power);
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 albedo = texture(u_texture, v_uv).rgb;
@@ -3094,7 +4342,33 @@ SHADERS = {
                 color = pow(color, vec3(1.0/2.2));
 
                 f_color = vec4(color, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Lambert (Matte Diffuse)": {
@@ -3107,6 +4381,13 @@ SHADERS = {
             "light_color_b": {"type": "float", "default": 0.9, "min": 0.0, "max": 1.0},
             "ambient": {"type": "float", "default": 0.2, "min": 0.0, "max": 1.0},
             "wrap": {"type": "float", "default": 0.0, "min": 0.0, "max": 1.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -3121,6 +4402,12 @@ SHADERS = {
             uniform float wrap;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 albedo = texture(u_texture, v_uv).rgb;
@@ -3144,7 +4431,33 @@ SHADERS = {
                 vec3 color = albedo * (ambient + diffuse * lightColor);
 
                 f_color = vec4(color, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Blinn-Phong (Specular)": {
@@ -3159,6 +4472,13 @@ SHADERS = {
             "specular_color_r": {"type": "float", "default": 1.0, "min": 0.0, "max": 1.0},
             "specular_color_g": {"type": "float", "default": 1.0, "min": 0.0, "max": 1.0},
             "specular_color_b": {"type": "float", "default": 1.0, "min": 0.0, "max": 1.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -3175,6 +4495,12 @@ SHADERS = {
             uniform float specular_color_b;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 albedo = texture(u_texture, v_uv).rgb;
@@ -3203,7 +4529,33 @@ SHADERS = {
                              specColor * specular_strength * spec;
 
                 f_color = vec4(color, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Anisotropic (Brushed Metal)": {
@@ -3215,6 +4567,13 @@ SHADERS = {
             "metallic": {"type": "float", "default": 0.9, "min": 0.0, "max": 1.0},
             "light_intensity": {"type": "float", "default": 1.5, "min": 0.0, "max": 3.0},
             "ambient": {"type": "float", "default": 0.1, "min": 0.0, "max": 0.5},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -3230,6 +4589,12 @@ SHADERS = {
             out vec4 f_color;
 
             const float PI = 3.14159265359;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 albedo = texture(u_texture, v_uv).rgb;
@@ -3282,7 +4647,33 @@ SHADERS = {
                 color = color / (color + vec3(1.0));
 
                 f_color = vec4(color, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Subsurface Scattering": {
@@ -3295,6 +4686,13 @@ SHADERS = {
             "translucency": {"type": "float", "default": 0.3, "min": 0.0, "max": 1.0},
             "light_wrap": {"type": "float", "default": 0.5, "min": 0.0, "max": 1.0},
             "ambient": {"type": "float", "default": 0.15, "min": 0.0, "max": 0.5},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -3309,6 +4707,12 @@ SHADERS = {
             uniform float ambient;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 albedo = texture(u_texture, v_uv).rgb;
@@ -3361,7 +4765,33 @@ SHADERS = {
                              backlightColor;
 
                 f_color = vec4(color, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Dithering (Retro)": {
@@ -3371,6 +4801,12 @@ SHADERS = {
             "pattern_type": {"type": "float", "default": 0.0, "min": 0.0, "max": 3.0},
             "contrast": {"type": "float", "default": 1.0, "min": 0.5, "max": 2.0},
             "monochrome": {"type": "float", "default": 0.0, "min": 0.0, "max": 1.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -3419,6 +4855,11 @@ SHADERS = {
             float blueNoise(vec2 pos) {
                 return fract(sin(dot(pos, vec2(12.9898, 78.233))) * 43758.5453);
             }
+            uniform float brightness;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 color = texture(u_texture, v_uv).rgb;
@@ -3462,7 +4903,32 @@ SHADERS = {
                 }
 
                 f_color = vec4(quantized, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "VHS Tape": {
@@ -3475,6 +4941,13 @@ SHADERS = {
             "head_switching": {"type": "float", "default": 0.1, "min": 0.0, "max": 0.3},
             "saturation_loss": {"type": "float", "default": 0.3, "min": 0.0, "max": 1.0},
             "time": {"type": "float", "default": 0.0, "min": 0.0, "max": 100.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -3493,6 +4966,12 @@ SHADERS = {
             float rand(vec2 co) {
                 return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 uv = v_uv;
@@ -3550,7 +5029,33 @@ SHADERS = {
                 color = clamp(color, 0.0, 1.0);
 
                 f_color = vec4(color, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Perlin Noise": {
@@ -3569,6 +5074,13 @@ SHADERS = {
             "color2_b": {"type": "float", "default": 1.0, "min": 0.0, "max": 1.0},
             "time": {"type": "float", "default": 0.0, "min": 0.0, "max": 100.0},
             "animate": {"type": "float", "default": 0.0, "min": 0.0, "max": 1.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -3674,6 +5186,12 @@ SHADERS = {
 
                 return value / total_amp;
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 tex_color = texture(u_texture, v_uv).rgb;
@@ -3712,7 +5230,33 @@ SHADERS = {
                 }
 
                 f_color = vec4(clamp(result, 0.0, 1.0), 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Water/Waves": {
@@ -3729,6 +5273,13 @@ SHADERS = {
             "water_tint": {"type": "float", "default": 0.2, "min": 0.0, "max": 1.0},
             "caustics": {"type": "float", "default": 0.3, "min": 0.0, "max": 1.0},
             "time": {"type": "float", "default": 0.0, "min": 0.0, "max": 100.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -3755,6 +5306,12 @@ SHADERS = {
                 float w4 = sin(length(p - 0.5) * ripple_freq - t * wave_speed * 2.0) * 0.2;
                 return (w1 + w2 + w3 + w4) * wave_height;
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 uv = v_uv;
@@ -3806,7 +5363,33 @@ SHADERS = {
                 color += vec3(0.5, 0.7, 0.9) * caustic;
 
                 f_color = vec4(color, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Volumetric Fog": {
@@ -3823,6 +5406,13 @@ SHADERS = {
             "light_x": {"type": "float", "default": 0.5, "min": 0.0, "max": 1.0},
             "light_y": {"type": "float", "default": 0.3, "min": 0.0, "max": 1.0},
             "time": {"type": "float", "default": 0.0, "min": 0.0, "max": 100.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -3870,6 +5460,12 @@ SHADERS = {
                 }
                 return value;
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 tex_color = texture(u_texture, v_uv).rgb;
@@ -3917,7 +5513,33 @@ SHADERS = {
                 color += fogColor * scatter;
 
                 f_color = vec4(color, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Parallax/Normal Map": {
@@ -3933,6 +5555,13 @@ SHADERS = {
             "ambient": {"type": "float", "default": 0.2, "min": 0.0, "max": 0.5},
             "specular": {"type": "float", "default": 0.5, "min": 0.0, "max": 1.0},
             "shininess": {"type": "float", "default": 32.0, "min": 1.0, "max": 128.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -3998,6 +5627,12 @@ SHADERS = {
 
                 return normalize(normal);
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 viewDir = normalize(vec3(view_angle_x, view_angle_y, 1.0));
@@ -4028,7 +5663,33 @@ SHADERS = {
                              vec3(1.0) * spec * specular;
 
                 f_color = vec4(color, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Inverted Hull Outline": {
@@ -4047,6 +5708,13 @@ SHADERS = {
             "outline_falloff": {"type": "float", "default": 1.0, "min": 0.5, "max": 3.0, "step": 0.1},
             "color_blend": {"type": "float", "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.1},
             "silhouette_only": {"type": "float", "default": 0.0, "min": 0.0, "max": 1.0, "step": 1.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -4087,6 +5755,12 @@ SHADERS = {
                 );
                 return normalize(normal);
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 tex_size = vec2(textureSize(u_texture, 0));
@@ -4201,7 +5875,33 @@ SHADERS = {
                 vec3 final_color = mix(center_color.rgb, outline_color, final_edge);
 
                 f_color = vec4(final_color, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     # ==================== TEXTURE/PATTERN GENERATION ====================
@@ -4221,6 +5921,13 @@ SHADERS = {
             "color2_g": {"type": "float", "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05},
             "color2_b": {"type": "float", "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05},
             "time": {"type": "float", "default": 0.0, "min": 0.0, "max": 100.0, "step": 0.1},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -4268,6 +5975,12 @@ SHADERS = {
 
                 return vec3(sqrt(dist1), sqrt(dist2), hash2(cell1).x);
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 tex_color = texture(u_texture, v_uv).rgb;
@@ -4297,7 +6010,33 @@ SHADERS = {
                 }
 
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Musgrave Texture": {
@@ -4312,6 +6051,13 @@ SHADERS = {
             "gain": {"type": "float", "default": 1.0, "min": 0.0, "max": 3.0, "step": 0.1},
             "type": {"type": "float", "default": 0.0, "min": 0.0, "max": 4.0, "step": 1.0},
             "blend_amount": {"type": "float", "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -4385,6 +6131,12 @@ SHADERS = {
                 }
                 return value;
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 tex_color = texture(u_texture, v_uv).rgb;
@@ -4403,7 +6155,33 @@ SHADERS = {
                 vec3 result = mix(tex_color, tex_color * pattern + pattern * 0.2, blend_amount);
 
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Wave Texture": {
@@ -4418,6 +6196,13 @@ SHADERS = {
             "detail_scale": {"type": "float", "default": 1.0, "min": 0.0, "max": 5.0, "step": 0.1},
             "phase": {"type": "float", "default": 0.0, "min": 0.0, "max": 6.28, "step": 0.1},
             "blend_amount": {"type": "float", "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -4455,6 +6240,12 @@ SHADERS = {
                 }
                 return value;
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 tex_color = texture(u_texture, v_uv).rgb;
@@ -4481,7 +6272,33 @@ SHADERS = {
                 vec3 result = mix(tex_color, tex_color * pattern + pattern * 0.3, blend_amount);
 
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Brick Texture": {
@@ -4501,6 +6318,13 @@ SHADERS = {
             "mortar_color_b": {"type": "float", "default": 0.75, "min": 0.0, "max": 1.0, "step": 0.05},
             "color_variation": {"type": "float", "default": 0.1, "min": 0.0, "max": 0.5, "step": 0.02},
             "blend_amount": {"type": "float", "default": 0.7, "min": 0.0, "max": 1.0, "step": 0.05},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -4518,6 +6342,12 @@ SHADERS = {
             float hash(vec2 p) {
                 return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 tex_color = texture(u_texture, v_uv).rgb;
@@ -4554,7 +6384,33 @@ SHADERS = {
                 vec3 result = mix(tex_color, pattern, blend_amount);
 
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Gradient Texture": {
@@ -4573,6 +6429,13 @@ SHADERS = {
             "color2_g": {"type": "float", "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05},
             "color2_b": {"type": "float", "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05},
             "blend_amount": {"type": "float", "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -4586,6 +6449,12 @@ SHADERS = {
             uniform float blend_amount;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 tex_color = texture(u_texture, v_uv).rgb;
@@ -4623,7 +6492,33 @@ SHADERS = {
 
                 vec3 result = mix(tex_color, gradient, blend_amount);
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Checker Texture": {
@@ -4640,6 +6535,13 @@ SHADERS = {
             "color2_b": {"type": "float", "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05},
             "blend_amount": {"type": "float", "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05},
             "softness": {"type": "float", "default": 0.0, "min": 0.0, "max": 0.5, "step": 0.02},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -4651,6 +6553,12 @@ SHADERS = {
             uniform float softness;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 tex_color = texture(u_texture, v_uv).rgb;
@@ -4673,7 +6581,33 @@ SHADERS = {
 
                 vec3 result = mix(tex_color, pattern, blend_amount);
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Magic Texture": {
@@ -4686,6 +6620,13 @@ SHADERS = {
             "color_shift": {"type": "float", "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05},
             "blend_amount": {"type": "float", "default": 0.6, "min": 0.0, "max": 1.0, "step": 0.05},
             "time": {"type": "float", "default": 0.0, "min": 0.0, "max": 100.0, "step": 0.1},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -4704,6 +6645,12 @@ SHADERS = {
                 vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
                 return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 tex_color = texture(u_texture, v_uv).rgb;
@@ -4718,7 +6665,33 @@ SHADERS = {
 
                 vec3 result = mix(tex_color, magic, blend_amount);
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     # ==================== COLOR MANIPULATION ====================
@@ -4731,6 +6704,11 @@ SHADERS = {
             "value": {"type": "float", "default": 1.0, "min": 0.0, "max": 3.0, "step": 0.05},
             "colorize": {"type": "float", "default": 0.0, "min": 0.0, "max": 1.0, "step": 1.0},
             "colorize_hue": {"type": "float", "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.02},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -4757,6 +6735,10 @@ SHADERS = {
                 vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
                 return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float gamma;
+            uniform float vignette;
 
             void main() {
                 vec3 color = texture(u_texture, v_uv).rgb;
@@ -4773,7 +6755,19 @@ SHADERS = {
 
                 vec3 result = hsv2rgb(clamp(hsv, 0.0, 1.0));
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Color Ramp": {
@@ -4795,6 +6789,13 @@ SHADERS = {
             "pos2": {"type": "float", "default": 0.33, "min": 0.0, "max": 1.0, "step": 0.02},
             "pos3": {"type": "float", "default": 0.66, "min": 0.0, "max": 1.0, "step": 0.02},
             "blend_original": {"type": "float", "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -4807,6 +6808,12 @@ SHADERS = {
             uniform float blend_original;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 tex_color = texture(u_texture, v_uv).rgb;
@@ -4828,7 +6835,33 @@ SHADERS = {
 
                 vec3 result = mix(ramp, tex_color * ramp, blend_original);
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "RGB Curves": {
@@ -4847,6 +6880,13 @@ SHADERS = {
             "b_white": {"type": "float", "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.02},
             "b_lift": {"type": "float", "default": 0.0, "min": -0.5, "max": 0.5, "step": 0.02},
             "b_gamma": {"type": "float", "default": 1.0, "min": 0.2, "max": 3.0, "step": 0.05},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -4864,6 +6904,12 @@ SHADERS = {
                 v += lift;
                 return clamp(v, 0.0, 1.0);
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 color = texture(u_texture, v_uv).rgb;
@@ -4873,7 +6919,33 @@ SHADERS = {
                 color.b = apply_curve(color.b, b_black, b_white, b_lift, b_gamma);
 
                 f_color = vec4(color, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Blend Modes": {
@@ -4886,6 +6958,13 @@ SHADERS = {
             "blend_color_b": {"type": "float", "default": 0.6, "min": 0.0, "max": 1.0, "step": 0.05},
             "opacity": {"type": "float", "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05},
             "use_luminance": {"type": "float", "default": 0.0, "min": 0.0, "max": 1.0, "step": 1.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -4914,6 +6993,12 @@ SHADERS = {
             vec3 blend_exclusion(vec3 a, vec3 b) { return a + b - 2.0 * a * b; }
             vec3 blend_add(vec3 a, vec3 b) { return a + b; }
             vec3 blend_subtract(vec3 a, vec3 b) { return a - b; }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 base = texture(u_texture, v_uv).rgb;
@@ -4940,7 +7025,33 @@ SHADERS = {
 
                 result = mix(base, clamp(result, 0.0, 1.0), opacity);
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Selective Color": {
@@ -4952,6 +7063,12 @@ SHADERS = {
             "hue_shift": {"type": "float", "default": 0.0, "min": -0.5, "max": 0.5, "step": 0.02},
             "sat_adjust": {"type": "float", "default": 0.0, "min": -1.0, "max": 1.0, "step": 0.05},
             "val_adjust": {"type": "float", "default": 0.0, "min": -1.0, "max": 1.0, "step": 0.05},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -4978,6 +7095,11 @@ SHADERS = {
                 vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
                 return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float vignette;
 
             void main() {
                 vec3 color = texture(u_texture, v_uv).rgb;
@@ -4995,7 +7117,21 @@ SHADERS = {
 
                 vec3 result = hsv2rgb(adjusted_hsv);
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Channel Mixer": {
@@ -5011,6 +7147,13 @@ SHADERS = {
             "br": {"type": "float", "default": 0.0, "min": -2.0, "max": 2.0, "step": 0.05},
             "bg": {"type": "float", "default": 0.0, "min": -2.0, "max": 2.0, "step": 0.05},
             "bb": {"type": "float", "default": 1.0, "min": -2.0, "max": 2.0, "step": 0.05},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -5020,6 +7163,12 @@ SHADERS = {
             uniform float br, bg, bb;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 color = texture(u_texture, v_uv).rgb;
@@ -5032,7 +7181,33 @@ SHADERS = {
 
                 vec3 result = mixer * color;
                 f_color = vec4(clamp(result, 0.0, 1.0), 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     # ==================== DISTORTION EFFECTS ====================
@@ -5044,6 +7219,13 @@ SHADERS = {
             "scale": {"type": "float", "default": 5.0, "min": 1.0, "max": 20.0, "step": 0.5},
             "octaves": {"type": "float", "default": 3.0, "min": 1.0, "max": 6.0, "step": 1.0},
             "time": {"type": "float", "default": 0.0, "min": 0.0, "max": 100.0, "step": 0.1},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -5077,6 +7259,12 @@ SHADERS = {
                 }
                 return value;
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 p = v_uv * scale + time * 0.1;
@@ -5087,7 +7275,33 @@ SHADERS = {
 
                 vec2 uv = clamp(v_uv + offset, 0.0, 1.0);
                 f_color = texture(u_texture, uv);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Spherize": {
@@ -5098,6 +7312,13 @@ SHADERS = {
             "center_x": {"type": "float", "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05},
             "center_y": {"type": "float", "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05},
             "radius": {"type": "float", "default": 0.5, "min": 0.1, "max": 1.0, "step": 0.05},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -5107,6 +7328,12 @@ SHADERS = {
             uniform float radius;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 center = vec2(center_x, center_y);
@@ -5125,7 +7352,33 @@ SHADERS = {
 
                 uv = clamp(uv, 0.0, 1.0);
                 f_color = texture(u_texture, uv);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Twirl": {
@@ -5136,6 +7389,13 @@ SHADERS = {
             "center_x": {"type": "float", "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05},
             "center_y": {"type": "float", "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05},
             "radius": {"type": "float", "default": 0.5, "min": 0.1, "max": 1.0, "step": 0.05},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -5145,6 +7405,12 @@ SHADERS = {
             uniform float radius;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 center = vec2(center_x, center_y);
@@ -5163,7 +7429,33 @@ SHADERS = {
                 uv = center + p;
                 uv = clamp(uv, 0.0, 1.0);
                 f_color = texture(u_texture, uv);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Wave Distortion": {
@@ -5176,6 +7468,13 @@ SHADERS = {
             "frequency_y": {"type": "float", "default": 10.0, "min": 1.0, "max": 50.0, "step": 1.0},
             "phase": {"type": "float", "default": 0.0, "min": 0.0, "max": 6.28, "step": 0.1},
             "time": {"type": "float", "default": 0.0, "min": 0.0, "max": 100.0, "step": 0.1},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -5186,6 +7485,12 @@ SHADERS = {
             uniform float time;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 offset = vec2(
@@ -5195,7 +7500,33 @@ SHADERS = {
 
                 vec2 uv = clamp(v_uv + offset, 0.0, 1.0);
                 f_color = texture(u_texture, uv);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Liquify": {
@@ -5206,6 +7537,13 @@ SHADERS = {
             "scale": {"type": "float", "default": 3.0, "min": 1.0, "max": 10.0, "step": 0.5},
             "turbulence": {"type": "float", "default": 2.0, "min": 0.5, "max": 5.0, "step": 0.5},
             "time": {"type": "float", "default": 0.0, "min": 0.0, "max": 100.0, "step": 0.1},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -5231,6 +7569,12 @@ SHADERS = {
                            mix(dot(hash2(i + vec2(0,1)), f - vec2(0,1)),
                                dot(hash2(i + vec2(1,1)), f - vec2(1,1)), u.x), u.y);
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 p = v_uv * scale;
@@ -5249,7 +7593,33 @@ SHADERS = {
                 vec2 uv = v_uv + flow * strength;
                 uv = clamp(uv, 0.0, 1.0);
                 f_color = texture(u_texture, uv);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Kaleidoscope": {
@@ -5261,6 +7631,13 @@ SHADERS = {
             "center_x": {"type": "float", "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05},
             "center_y": {"type": "float", "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05},
             "zoom": {"type": "float", "default": 1.0, "min": 0.5, "max": 3.0, "step": 0.1},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -5271,6 +7648,12 @@ SHADERS = {
             uniform float zoom;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 center = vec2(center_x, center_y);
@@ -5288,7 +7671,33 @@ SHADERS = {
                 vec2 uv = center + vec2(cos(angle), sin(angle)) * radius;
                 uv = fract(uv); // Wrap around
                 f_color = texture(u_texture, uv);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     # ==================== ADVANCED LIGHTING ====================
@@ -5301,6 +7710,13 @@ SHADERS = {
             "samples": {"type": "float", "default": 8.0, "min": 4.0, "max": 16.0, "step": 1.0},
             "falloff": {"type": "float", "default": 1.5, "min": 0.5, "max": 3.0, "step": 0.1},
             "only_ao": {"type": "float", "default": 0.0, "min": 0.0, "max": 1.0, "step": 1.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -5316,6 +7732,12 @@ SHADERS = {
             float getDepth(vec2 uv) {
                 return dot(texture(u_texture, uv).rgb, vec3(0.299, 0.587, 0.114));
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 color = texture(u_texture, v_uv).rgb;
@@ -5341,7 +7763,33 @@ SHADERS = {
 
                 vec3 result = only_ao > 0.5 ? vec3(ao) : color * ao;
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Rim Light": {
@@ -5354,6 +7802,13 @@ SHADERS = {
             "rim_power": {"type": "float", "default": 2.0, "min": 0.5, "max": 8.0, "step": 0.5},
             "rim_strength": {"type": "float", "default": 1.0, "min": 0.0, "max": 3.0, "step": 0.1},
             "light_angle": {"type": "float", "default": 0.0, "min": 0.0, "max": 6.28, "step": 0.1},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -5364,6 +7819,12 @@ SHADERS = {
             uniform float light_angle;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 color = texture(u_texture, v_uv).rgb;
@@ -5393,7 +7854,33 @@ SHADERS = {
                 vec3 result = color + rim_color * rim * rim_strength;
 
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Matcap": {
@@ -5403,6 +7890,13 @@ SHADERS = {
             "matcap_type": {"type": "float", "default": 0.0, "min": 0.0, "max": 5.0, "step": 1.0},
             "intensity": {"type": "float", "default": 1.0, "min": 0.0, "max": 2.0, "step": 0.1},
             "blend": {"type": "float", "default": 0.7, "min": 0.0, "max": 1.0, "step": 0.05},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -5450,6 +7944,12 @@ SHADERS = {
                     return vec3(rim * 0.5, rim * 0.7, rim);
                 }
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 color = texture(u_texture, v_uv).rgb;
@@ -5468,7 +7968,33 @@ SHADERS = {
                 vec3 result = mix(color, matcap * color + matcap * 0.3, blend);
 
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Gooch Shading": {
@@ -5485,6 +8011,13 @@ SHADERS = {
             "diffuse_cool": {"type": "float", "default": 0.4, "min": 0.0, "max": 1.0, "step": 0.05},
             "light_x": {"type": "float", "default": 1.0, "min": -2.0, "max": 2.0, "step": 0.1},
             "light_y": {"type": "float", "default": 1.0, "min": -2.0, "max": 2.0, "step": 0.1},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -5495,6 +8028,12 @@ SHADERS = {
             uniform float light_x, light_y;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 color = texture(u_texture, v_uv).rgb;
@@ -5520,7 +8059,33 @@ SHADERS = {
 
                 vec3 result = mix(k_cool, k_warm, t);
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "X-Ray": {
@@ -5533,6 +8098,13 @@ SHADERS = {
             "color_g": {"type": "float", "default": 0.6, "min": 0.0, "max": 1.0, "step": 0.05},
             "color_b": {"type": "float", "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05},
             "invert": {"type": "float", "default": 0.0, "min": 0.0, "max": 1.0, "step": 1.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -5543,6 +8115,12 @@ SHADERS = {
             uniform float invert;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 color = texture(u_texture, v_uv).rgb;
@@ -5575,7 +8153,33 @@ SHADERS = {
                 }
 
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     # ==================== ARTISTIC/STYLIZATION ====================
@@ -5585,6 +8189,13 @@ SHADERS = {
         "uniforms": {
             "radius": {"type": "float", "default": 4.0, "min": 1.0, "max": 10.0, "step": 1.0},
             "sharpness": {"type": "float", "default": 8.0, "min": 1.0, "max": 20.0, "step": 1.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -5593,6 +8204,12 @@ SHADERS = {
             uniform float sharpness;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 texel = 1.0 / vec2(textureSize(u_texture, 0));
@@ -5641,7 +8258,33 @@ SHADERS = {
                 }
 
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Cross Hatch": {
@@ -5659,6 +8302,13 @@ SHADERS = {
             "paper_color_r": {"type": "float", "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05},
             "paper_color_g": {"type": "float", "default": 0.98, "min": 0.0, "max": 1.0, "step": 0.05},
             "paper_color_b": {"type": "float", "default": 0.95, "min": 0.0, "max": 1.0, "step": 0.05},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -5678,6 +8328,12 @@ SHADERS = {
                 vec2 rotated = vec2(uv.x * c - uv.y * s, uv.x * s + uv.y * c);
                 return abs(sin(rotated.x * dens * 3.14159));
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 color = texture(u_texture, v_uv).rgb;
@@ -5707,7 +8363,33 @@ SHADERS = {
 
                 vec3 result = mix(ink, paper, pattern);
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Stippling": {
@@ -5723,6 +8405,13 @@ SHADERS = {
             "paper_color_r": {"type": "float", "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05},
             "paper_color_g": {"type": "float", "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05},
             "paper_color_b": {"type": "float", "default": 0.95, "min": 0.0, "max": 1.0, "step": 0.05},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -5738,6 +8427,12 @@ SHADERS = {
             float hash(vec2 p) {
                 return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 color = texture(u_texture, v_uv).rgb;
@@ -5769,7 +8464,33 @@ SHADERS = {
 
                 vec3 result = mix(paper, ink, dot);
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Woodcut": {
@@ -5781,6 +8502,13 @@ SHADERS = {
             "line_thickness": {"type": "float", "default": 0.4, "min": 0.1, "max": 0.8, "step": 0.05},
             "distortion": {"type": "float", "default": 0.1, "min": 0.0, "max": 0.5, "step": 0.02},
             "invert": {"type": "float", "default": 0.0, "min": 0.0, "max": 1.0, "step": 1.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -5796,6 +8524,12 @@ SHADERS = {
             float hash(vec2 p) {
                 return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 color = texture(u_texture, v_uv).rgb;
@@ -5818,7 +8552,33 @@ SHADERS = {
                 if(invert > 0.5) pattern = 1.0 - pattern;
 
                 f_color = vec4(vec3(pattern), 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Stained Glass": {
@@ -5832,6 +8592,13 @@ SHADERS = {
             "edge_color_b": {"type": "float", "default": 0.1, "min": 0.0, "max": 1.0, "step": 0.05},
             "saturation_boost": {"type": "float", "default": 1.3, "min": 0.5, "max": 2.0, "step": 0.1},
             "light_variation": {"type": "float", "default": 0.2, "min": 0.0, "max": 0.5, "step": 0.05},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -5848,6 +8615,12 @@ SHADERS = {
                 p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
                 return fract(sin(p) * 43758.5453);
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 tex_size = vec2(textureSize(u_texture, 0));
@@ -5891,7 +8664,33 @@ SHADERS = {
 
                 vec3 result = mix(edge_col, cell_color, edge);
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Palette Swap": {
@@ -5901,6 +8700,13 @@ SHADERS = {
             "palette_size": {"type": "float", "default": 8.0, "min": 2.0, "max": 16.0, "step": 1.0},
             "palette_type": {"type": "float", "default": 0.0, "min": 0.0, "max": 5.0, "step": 1.0},
             "dither_amount": {"type": "float", "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.1},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -5963,6 +8769,12 @@ SHADERS = {
                     return clamp(rgb, 0.0, 1.0);
                 }
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 color = texture(u_texture, v_uv).rgb;
@@ -5987,7 +8799,33 @@ SHADERS = {
 
                 vec3 result = getPaletteColor(index, int(palette_type));
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     # ==================== COMPOSITING EFFECTS ====================
@@ -6002,6 +8840,13 @@ SHADERS = {
             "streaks": {"type": "float", "default": 6.0, "min": 0.0, "max": 12.0, "step": 1.0},
             "chromatic": {"type": "float", "default": 0.3, "min": 0.0, "max": 1.0, "step": 0.05},
             "ghosts": {"type": "float", "default": 3.0, "min": 0.0, "max": 6.0, "step": 1.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -6014,6 +8859,12 @@ SHADERS = {
             uniform float ghosts;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 color = texture(u_texture, v_uv).rgb;
@@ -6061,7 +8912,33 @@ SHADERS = {
 
                 vec3 result = color + flare_color * intensity;
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Light Streaks": {
@@ -6076,6 +8953,13 @@ SHADERS = {
             "color_r": {"type": "float", "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05},
             "color_g": {"type": "float", "default": 0.9, "min": 0.0, "max": 1.0, "step": 0.05},
             "color_b": {"type": "float", "default": 0.7, "min": 0.0, "max": 1.0, "step": 0.05},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -6088,6 +8972,12 @@ SHADERS = {
             uniform float color_r, color_g, color_b;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 color = texture(u_texture, v_uv).rgb;
@@ -6113,7 +9003,33 @@ SHADERS = {
 
                 vec3 result = color + streak * tint * intensity;
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "God Rays": {
@@ -6126,6 +9042,13 @@ SHADERS = {
             "decay": {"type": "float", "default": 0.95, "min": 0.8, "max": 1.0, "step": 0.01},
             "samples": {"type": "float", "default": 50.0, "min": 10.0, "max": 100.0, "step": 10.0},
             "threshold": {"type": "float", "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -6137,6 +9060,12 @@ SHADERS = {
             uniform float threshold;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 color = texture(u_texture, v_uv).rgb;
@@ -6163,7 +9092,33 @@ SHADERS = {
 
                 vec3 result = color + rays * intensity;
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Lens Dirt": {
@@ -6174,6 +9129,13 @@ SHADERS = {
             "dirt_scale": {"type": "float", "default": 2.0, "min": 0.5, "max": 5.0, "step": 0.5},
             "bloom_threshold": {"type": "float", "default": 0.7, "min": 0.0, "max": 1.0, "step": 0.05},
             "bloom_intensity": {"type": "float", "default": 0.5, "min": 0.0, "max": 2.0, "step": 0.1},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -6207,6 +9169,12 @@ SHADERS = {
                 }
                 return value;
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 color = texture(u_texture, v_uv).rgb;
@@ -6231,7 +9199,33 @@ SHADERS = {
                 result = mix(result, result * vec3(1.0, 0.95, 0.9), dirt * 0.3);
 
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Bokeh": {
@@ -6243,6 +9237,13 @@ SHADERS = {
             "threshold": {"type": "float", "default": 0.7, "min": 0.0, "max": 1.0, "step": 0.05},
             "bokeh_size": {"type": "float", "default": 1.0, "min": 0.5, "max": 3.0, "step": 0.1},
             "rotation": {"type": "float", "default": 0.0, "min": 0.0, "max": 6.28, "step": 0.1},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -6281,6 +9282,12 @@ SHADERS = {
                 p += ecs * clamp(-dot(p, ecs), 0.0, r * acs.y / ecs.y);
                 return length(p) * sign(p.x);
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 color = texture(u_texture, v_uv).rgb;
@@ -6328,7 +9335,33 @@ SHADERS = {
                 }
 
                 f_color = vec4(bokeh, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     # ==================== EDGE EFFECTS ====================
@@ -6338,6 +9371,13 @@ SHADERS = {
         "uniforms": {
             "radius": {"type": "float", "default": 2.0, "min": 1.0, "max": 10.0, "step": 1.0},
             "shape": {"type": "float", "default": 0.0, "min": 0.0, "max": 1.0, "step": 1.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -6346,6 +9386,12 @@ SHADERS = {
             uniform float shape;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 texel = 1.0 / vec2(textureSize(u_texture, 0));
@@ -6365,7 +9411,33 @@ SHADERS = {
                 }
 
                 f_color = vec4(max_color, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Erode": {
@@ -6374,6 +9446,13 @@ SHADERS = {
         "uniforms": {
             "radius": {"type": "float", "default": 2.0, "min": 1.0, "max": 10.0, "step": 1.0},
             "shape": {"type": "float", "default": 0.0, "min": 0.0, "max": 1.0, "step": 1.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -6382,6 +9461,12 @@ SHADERS = {
             uniform float shape;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 texel = 1.0 / vec2(textureSize(u_texture, 0));
@@ -6400,7 +9485,33 @@ SHADERS = {
                 }
 
                 f_color = vec4(min_color, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Laplacian Edge": {
@@ -6411,6 +9522,13 @@ SHADERS = {
             "threshold": {"type": "float", "default": 0.0, "min": 0.0, "max": 0.5, "step": 0.02},
             "invert": {"type": "float", "default": 0.0, "min": 0.0, "max": 1.0, "step": 1.0},
             "colored": {"type": "float", "default": 0.0, "min": 0.0, "max": 1.0, "step": 1.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -6421,6 +9539,12 @@ SHADERS = {
             uniform float colored;
             in vec2 v_uv;
             out vec4 f_color;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 texel = 1.0 / vec2(textureSize(u_texture, 0));
@@ -6451,7 +9575,33 @@ SHADERS = {
                 }
 
                 f_color = vec4(edge, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Canny Edge": {
@@ -6462,6 +9612,13 @@ SHADERS = {
             "high_threshold": {"type": "float", "default": 0.3, "min": 0.1, "max": 1.0, "step": 0.02},
             "blur_radius": {"type": "float", "default": 1.0, "min": 0.0, "max": 3.0, "step": 0.5},
             "invert": {"type": "float", "default": 0.0, "min": 0.0, "max": 1.0, "step": 1.0},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -6476,6 +9633,12 @@ SHADERS = {
             float getLum(vec2 uv) {
                 return dot(texture(u_texture, uv).rgb, vec3(0.299, 0.587, 0.114));
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec2 texel = 1.0 / vec2(textureSize(u_texture, 0));
@@ -6517,7 +9680,33 @@ SHADERS = {
                 if(invert > 0.5) edge = 1.0 - edge;
 
                 f_color = vec4(vec3(edge), 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
     "Double Edge Glow": {
@@ -6533,6 +9722,13 @@ SHADERS = {
             "inner_width": {"type": "float", "default": 2.0, "min": 0.0, "max": 10.0, "step": 0.5},
             "outer_width": {"type": "float", "default": 3.0, "min": 0.0, "max": 10.0, "step": 0.5},
             "intensity": {"type": "float", "default": 1.0, "min": 0.0, "max": 2.0, "step": 0.1},
+        
+            "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
+            "gamma": {"min": 0.1, "max": 3.0, "default": 1.0, "step": 0.01},
+            "hue_shift": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
+            "vignette": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         },
         "frag": """
             #version 330 core
@@ -6559,6 +9755,12 @@ SHADERS = {
 
                 return sqrt(gx*gx + gy*gy);
             }
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            uniform float gamma;
+            uniform float hue_shift;
+            uniform float vignette;
 
             void main() {
                 vec3 color = texture(u_texture, v_uv).rgb;
@@ -6591,7 +9793,33 @@ SHADERS = {
                 vec3 result = color + glow * intensity;
 
                 f_color = vec4(result, 1.0);
-            }
+            
+    // --- Post-processing adjustments ---
+    vec3 _pp = f_color.rgb;
+    _pp += brightness;
+    _pp = (_pp - 0.5) * contrast + 0.5;
+    float _pp_gray = dot(_pp, vec3(0.299, 0.587, 0.114));
+    _pp = mix(vec3(_pp_gray), _pp, saturation);
+    _pp = pow(max(_pp, vec3(0.0)), vec3(1.0 / gamma));
+    if (hue_shift > 0.001) {
+        vec4 _hK = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 _hp = mix(vec4(_pp.bg, _hK.wz), vec4(_pp.gb, _hK.xy), step(_pp.b, _pp.g));
+        vec4 _hq = mix(vec4(_hp.xyw, _pp.r), vec4(_pp.r, _hp.yzx), step(_hp.x, _pp.r));
+        float _hd = _hq.x - min(_hq.w, _hq.y);
+        float _he = 1.0e-10;
+        vec3 _hsv = vec3(abs(_hq.z + (_hq.w - _hq.y) / (6.0 * _hd + _he)), _hd / (_hq.x + _he), _hq.x);
+        _hsv.x = fract(_hsv.x + hue_shift);
+        vec4 _hK2 = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 _hp2 = abs(fract(_hsv.xxx + _hK2.xyz) * 6.0 - _hK2.www);
+        _pp = _hsv.z * mix(_hK2.xxx, clamp(_hp2 - _hK2.xxx, 0.0, 1.0), _hsv.y);
+    }
+    if (vignette > 0.001) {
+        vec2 _vuv = v_uv - 0.5;
+        float _vd = dot(_vuv, _vuv);
+        _pp *= 1.0 - vignette * _vd * 2.0;
+    }
+    f_color = vec4(clamp(_pp, 0.0, 1.0), f_color.a);
+    }
         """
     },
 }
@@ -6941,84 +10169,6 @@ QUICK_AI_PROMPTS = {
     "Noir": "Black and white film noir with high contrast",
 }
 
-# Simple passthrough shader for blitting textures to screen/FBO
-PASSTHROUGH_SHADER = """
-#version 330 core
-uniform sampler2D u_texture;
-in vec2 v_uv;
-out vec4 fragColor;
-void main() {
-    fragColor = texture(u_texture, v_uv);
-}
-"""
-
-# Blend modes for layer compositing
-BLEND_MODES = {
-    "normal": 0, "multiply": 1, "screen": 2, "overlay": 3,
-    "soft_light": 4, "hard_light": 5, "add": 6, "subtract": 7,
-    "difference": 8, "exclusion": 9, "color_dodge": 10, "color_burn": 11,
-}
-BLEND_MODE_NAMES = list(BLEND_MODES.keys())
-
-# GPU compositing shader for layer blending
-COMPOSITING_SHADER = """
-#version 330 core
-uniform sampler2D u_base;
-uniform sampler2D u_overlay;
-uniform float u_opacity;
-uniform int u_blend_mode;
-in vec2 v_uv;
-out vec4 fragColor;
-
-vec3 blend_normal(vec3 b, vec3 l)    { return l; }
-vec3 blend_multiply(vec3 b, vec3 l)  { return b * l; }
-vec3 blend_screen(vec3 b, vec3 l)    { return 1.0 - (1.0 - b) * (1.0 - l); }
-vec3 blend_overlay(vec3 b, vec3 l) {
-    return mix(2.0 * b * l, 1.0 - 2.0 * (1.0 - b) * (1.0 - l), step(0.5, b));
-}
-vec3 blend_soft_light(vec3 b, vec3 l) {
-    return mix(
-        2.0 * b * l + b * b * (1.0 - 2.0 * l),
-        sqrt(b) * (2.0 * l - 1.0) + 2.0 * b * (1.0 - l),
-        step(0.5, l)
-    );
-}
-vec3 blend_hard_light(vec3 b, vec3 l) {
-    return mix(2.0 * b * l, 1.0 - 2.0 * (1.0 - b) * (1.0 - l), step(0.5, l));
-}
-vec3 blend_add(vec3 b, vec3 l)        { return min(b + l, 1.0); }
-vec3 blend_subtract(vec3 b, vec3 l)   { return max(b - l, 0.0); }
-vec3 blend_difference(vec3 b, vec3 l) { return abs(b - l); }
-vec3 blend_exclusion(vec3 b, vec3 l)  { return b + l - 2.0 * b * l; }
-vec3 blend_color_dodge(vec3 b, vec3 l) {
-    return min(b / max(1.0 - l, 0.001), 1.0);
-}
-vec3 blend_color_burn(vec3 b, vec3 l) {
-    return 1.0 - min((1.0 - b) / max(l, 0.001), 1.0);
-}
-
-void main() {
-    vec4 base = texture(u_base, v_uv);
-    vec4 over = texture(u_overlay, v_uv);
-    vec3 blended;
-    if      (u_blend_mode == 0)  blended = blend_normal(base.rgb, over.rgb);
-    else if (u_blend_mode == 1)  blended = blend_multiply(base.rgb, over.rgb);
-    else if (u_blend_mode == 2)  blended = blend_screen(base.rgb, over.rgb);
-    else if (u_blend_mode == 3)  blended = blend_overlay(base.rgb, over.rgb);
-    else if (u_blend_mode == 4)  blended = blend_soft_light(base.rgb, over.rgb);
-    else if (u_blend_mode == 5)  blended = blend_hard_light(base.rgb, over.rgb);
-    else if (u_blend_mode == 6)  blended = blend_add(base.rgb, over.rgb);
-    else if (u_blend_mode == 7)  blended = blend_subtract(base.rgb, over.rgb);
-    else if (u_blend_mode == 8)  blended = blend_difference(base.rgb, over.rgb);
-    else if (u_blend_mode == 9)  blended = blend_exclusion(base.rgb, over.rgb);
-    else if (u_blend_mode == 10) blended = blend_color_dodge(base.rgb, over.rgb);
-    else if (u_blend_mode == 11) blended = blend_color_burn(base.rgb, over.rgb);
-    else                         blended = blend_normal(base.rgb, over.rgb);
-    vec3 result = mix(base.rgb, blended, u_opacity * over.a);
-    fragColor = vec4(result, 1.0);
-}
-"""
-
 VERTEX_SHADER = """
 #version 330 core
 in vec2 in_vert;
@@ -7027,6 +10177,17 @@ out vec2 v_uv;
 void main() {
     gl_Position = vec4(in_vert, 0.0, 1.0);
     v_uv = in_uv;
+}
+"""
+
+# Simple passthrough fragment shader (used for placeholder checkerboard)
+PASSTHROUGH_FRAG = """
+#version 330 core
+uniform sampler2D u_texture;
+in vec2 v_uv;
+out vec4 f_color;
+void main() {
+    f_color = texture(u_texture, v_uv);
 }
 """
 
@@ -7080,6 +10241,59 @@ void main() {{
     f_color.rgb *= lighting;
 }}
 """
+
+# AOV render pass shaders for 3D mode
+AOV_SHADERS = {
+    "normals": """
+#version 330 core
+in vec3 v_normal;
+in vec2 v_uv;
+in vec3 v_position;
+out vec4 f_color;
+void main() {
+    vec3 n = normalize(v_normal) * 0.5 + 0.5;
+    f_color = vec4(n, 1.0);
+}
+""",
+    "depth": """
+#version 330 core
+in vec3 v_normal;
+in vec2 v_uv;
+in vec3 v_position;
+uniform float u_near;
+uniform float u_far;
+out vec4 f_color;
+void main() {
+    float ndc = gl_FragCoord.z;
+    float linearDepth = (2.0 * u_near) / (u_far + u_near - ndc * (u_far - u_near));
+    f_color = vec4(vec3(1.0 - linearDepth), 1.0);
+}
+""",
+    "diffuse": """
+#version 330 core
+uniform sampler2D u_texture;
+in vec2 v_uv;
+in vec3 v_normal;
+in vec3 v_position;
+out vec4 f_color;
+void main() {
+    f_color = texture(u_texture, v_uv);
+}
+""",
+    "ao": """
+#version 330 core
+in vec3 v_normal;
+in vec2 v_uv;
+in vec3 v_position;
+out vec4 f_color;
+void main() {
+    vec3 n = normalize(v_normal);
+    float ao = clamp(dot(n, vec3(0.0, 1.0, 0.0)) * 0.5 + 0.5, 0.0, 1.0);
+    ao = pow(ao, 2.0);
+    f_color = vec4(vec3(ao), 1.0);
+}
+""",
+}
 
 
 def load_obj(filepath):
@@ -7345,23 +10559,18 @@ class ShaderCanvas(QOpenGLWidget):
         self.gif_timer.timeout.connect(self._advance_gif_frame)
         self.is_gif = False
 
-        # Shader layer system v2 (compositing model)
-        self.shader_layers = []           # Layer data list from panel signal
-        self._prev_layer_data = []        # Previous frame's data for dirty comparison
-        self.layer_programs = {}          # Cached compiled shader programs
-        self.layer_cache = {}             # {layer_id: {'fbo': int, 'texture': int, 'dirty': True}}
-        self.accum_fbo_a = None           # Accumulation FBO A (ping-pong)
-        self.accum_fbo_a_texture = None
-        self.accum_fbo_b = None           # Accumulation FBO B
-        self.accum_fbo_b_texture = None
-        self.accum_fbo_size = (0, 0)
-        self.compositing_program = None
-        self.passthrough_program = None  # Simple texture blit shader
-
         # Bake chain (interactive multi-pass shader chaining)
         self._bake_chain = []            # List of {'shader': name, 'params': {...}} for each baked pass
         self._original_image_data = None # numpy array of original image (for reset)
         self._original_image_path = None # path to original image (for reset)
+
+        # AOV render passes for 3D mode
+        self.render_pass_mode = "combined"  # "combined", "normals", "depth", "diffuse", "ao"
+        self.aov_programs = {}  # Compiled AOV shader programs keyed by pass name
+
+        # Passthrough shader for placeholder (no effects on checkerboard background)
+        self._has_image = False  # True when a real image is loaded
+        self._passthrough_program = None  # Compiled passthrough shader
 
         # Enable mouse tracking
         self.setMouseTracking(True)
@@ -7421,6 +10630,7 @@ class ShaderCanvas(QOpenGLWidget):
 
         self.image_size = (size, size)
         self._upload_texture(data)
+        self._has_image = False
 
     def _upload_texture(self, data):
         """Upload numpy array as texture."""
@@ -7544,11 +10754,6 @@ class ShaderCanvas(QOpenGLWidget):
             return SHADERS[shader_name].get("uniforms", {})
         return {}
 
-    def set_shader_layers(self, layers_data):
-        """Set the shader layer stack for multi-layer rendering."""
-        # Just store the data - shader compilation will happen lazily during paintGL
-        self.shader_layers = layers_data
-
     def bake_current_pass(self):
         """Render the current shader effect and commit it as the new source texture.
         Records the shader+params in the bake chain for later batch processing.
@@ -7567,7 +10772,7 @@ class ShaderCanvas(QOpenGLWidget):
             return None
 
         # Record this pass in the chain
-        entry = {'shader': self.current_preset, 'params': dict(self.params)}
+        entry = {'shader': self.current_preset, 'params': dict(self.params), 'enabled': True}
         self._bake_chain.append(entry)
 
         # Upload rendered result as new source texture
@@ -7591,64 +10796,31 @@ class ShaderCanvas(QOpenGLWidget):
             self._compile_shader()
             self.update()
 
-    def _compile_layer_shader(self, shader_name):
-        """Compile a shader for use in layered rendering."""
-        # If already compiled for layers, return cached
-        if shader_name in self.layer_programs:
-            return self.layer_programs[shader_name]
-
-        if shader_name not in SHADERS:
-            return None
-
-        try:
-            frag_src = SHADERS[shader_name]["frag"]
-
-            vert_shader = GL.glCreateShader(GL.GL_VERTEX_SHADER)
-            GL.glShaderSource(vert_shader, VERTEX_SHADER)
-            GL.glCompileShader(vert_shader)
-            if not GL.glGetShaderiv(vert_shader, GL.GL_COMPILE_STATUS):
-                error = GL.glGetShaderInfoLog(vert_shader).decode()
-                print(f"Vertex shader error for layer {shader_name}: {error}")
-                GL.glDeleteShader(vert_shader)
-                return None
-
-            frag_shader = GL.glCreateShader(GL.GL_FRAGMENT_SHADER)
-            GL.glShaderSource(frag_shader, frag_src)
-            GL.glCompileShader(frag_shader)
-            if not GL.glGetShaderiv(frag_shader, GL.GL_COMPILE_STATUS):
-                error = GL.glGetShaderInfoLog(frag_shader).decode()
-                print(f"Fragment shader error for layer {shader_name}: {error}")
-                GL.glDeleteShader(vert_shader)
-                GL.glDeleteShader(frag_shader)
-                return None
-
-            program = GL.glCreateProgram()
-            GL.glAttachShader(program, vert_shader)
-            GL.glAttachShader(program, frag_shader)
-
-            # Bind attribute locations to match VAO setup
-            GL.glBindAttribLocation(program, 0, "in_vert")
-            GL.glBindAttribLocation(program, 1, "in_uv")
-
-            GL.glLinkProgram(program)
-
-            GL.glDeleteShader(vert_shader)
-            GL.glDeleteShader(frag_shader)
-
-            if not GL.glGetProgramiv(program, GL.GL_LINK_STATUS):
-                error = GL.glGetProgramInfoLog(program).decode()
-                print(f"Program link error for layer {shader_name}: {error}")
-                GL.glDeleteProgram(program)
-                return None
-
-            self.layer_programs[shader_name] = program
-            return program
-
-        except Exception as e:
-            import traceback
-            print(f"Exception compiling layer shader {shader_name}: {e}")
-            traceback.print_exc()
-            return None
+    def _replay_chain(self):
+        """Re-render the entire bake chain from the original image, skipping disabled entries."""
+        if self._original_image_data is None:
+            return
+        self.makeCurrent()
+        w, h = self.image_size
+        # Reload original image
+        self._upload_texture(np.ascontiguousarray(np.flipud(self._original_image_data)))
+        # Replay each enabled entry
+        for entry in self._bake_chain:
+            if not entry.get('enabled', True):
+                continue
+            shader_name = entry['shader']
+            self.current_preset = shader_name
+            self._compile_shader()
+            if self.program is None:
+                continue
+            image_data = self._export_2d_single(self.program, entry['params'], w, h)
+            if image_data is not None:
+                self._upload_texture(np.ascontiguousarray(np.flipud(image_data)))
+        # Reset to Original for further editing
+        self.current_preset = "Original"
+        self._init_params()
+        self._compile_shader()
+        self.update()
 
     def _init_params(self):
         """Initialize parameters from shader definition."""
@@ -7719,6 +10891,56 @@ class ShaderCanvas(QOpenGLWidget):
             GL.glEnableVertexAttribArray(uv_loc)
             GL.glVertexAttribPointer(uv_loc, 2, GL.GL_FLOAT, GL.GL_FALSE, 16,
                                      GL.ctypes.c_void_p(8))
+
+    def _compile_passthrough(self):
+        """Compile the passthrough shader for placeholder rendering."""
+        if self._passthrough_program is not None:
+            return  # Already compiled
+
+        vert = GL.glCreateShader(GL.GL_VERTEX_SHADER)
+        GL.glShaderSource(vert, VERTEX_SHADER)
+        GL.glCompileShader(vert)
+        if not GL.glGetShaderiv(vert, GL.GL_COMPILE_STATUS):
+            print(f"Passthrough vertex shader error: {GL.glGetShaderInfoLog(vert).decode()}")
+            return
+
+        frag = GL.glCreateShader(GL.GL_FRAGMENT_SHADER)
+        GL.glShaderSource(frag, PASSTHROUGH_FRAG)
+        GL.glCompileShader(frag)
+        if not GL.glGetShaderiv(frag, GL.GL_COMPILE_STATUS):
+            print(f"Passthrough fragment shader error: {GL.glGetShaderInfoLog(frag).decode()}")
+            return
+
+        self._passthrough_program = GL.glCreateProgram()
+        GL.glAttachShader(self._passthrough_program, vert)
+        GL.glAttachShader(self._passthrough_program, frag)
+        GL.glLinkProgram(self._passthrough_program)
+
+        if not GL.glGetProgramiv(self._passthrough_program, GL.GL_LINK_STATUS):
+            print(f"Passthrough link error: {GL.glGetProgramInfoLog(self._passthrough_program).decode()}")
+            self._passthrough_program = None
+            return
+
+        GL.glDeleteShader(vert)
+        GL.glDeleteShader(frag)
+
+        # Setup vertex attributes for passthrough program
+        GL.glUseProgram(self._passthrough_program)
+        GL.glBindVertexArray(self.vao)
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.vbo)
+
+        pos_loc = GL.glGetAttribLocation(self._passthrough_program, "in_vert")
+        if pos_loc >= 0:
+            GL.glEnableVertexAttribArray(pos_loc)
+            GL.glVertexAttribPointer(pos_loc, 2, GL.GL_FLOAT, GL.GL_FALSE, 16, None)
+
+        uv_loc = GL.glGetAttribLocation(self._passthrough_program, "in_uv")
+        if uv_loc >= 0:
+            GL.glEnableVertexAttribArray(uv_loc)
+            GL.glVertexAttribPointer(uv_loc, 2, GL.GL_FLOAT, GL.GL_FALSE, 16,
+                                     GL.ctypes.c_void_p(8))
+
+        print("Compiled passthrough shader")
 
     def _compile_shader_3d(self):
         """Compile the 3D shader program with current effect."""
@@ -7927,9 +11149,6 @@ void main() {{
         try:
             self.makeCurrent()
 
-            # Invalidate all layer caches (source image is changing)
-            self._invalidate_all_layer_caches()
-
             # Stop any existing GIF animation
             self.gif_timer.stop()
             self.gif_playing = False
@@ -7992,6 +11211,7 @@ void main() {{
                 self._original_image_data = data.copy()
                 self._original_image_path = path
 
+            self._has_image = True
             self.update()
             self.textureLoaded.emit(path)
             return True
@@ -8087,23 +11307,36 @@ void main() {{
 
     def _paint_2d(self):
         """Render 2D image with shader effect."""
-        if self.program is None or self.texture_id is None:
+        if self.texture_id is None:
             return
 
         GL.glDisable(GL.GL_DEPTH_TEST)
 
-        # Check if we have shader layers to render
-        if self.shader_layers:
-            enabled_layers = [l for l in self.shader_layers if l.get('enabled', True)]
-            if enabled_layers:
-                self._render_with_layers(enabled_layers)
+        # Use passthrough shader for placeholder (no effects on checkerboard)
+        if not self._has_image:
+            self._compile_passthrough()
+            if self._passthrough_program is None:
                 return
+            GL.glUseProgram(self._passthrough_program)
+            GL.glBindVertexArray(self.vao)
+            GL.glActiveTexture(GL.GL_TEXTURE0)
+            GL.glBindTexture(GL.GL_TEXTURE_2D, self.texture_id)
+            tex_loc = GL.glGetUniformLocation(self._passthrough_program, "u_texture")
+            if tex_loc >= 0:
+                GL.glUniform1i(tex_loc, 0)
+            GL.glDrawArrays(GL.GL_TRIANGLE_STRIP, 0, 4)
+            return
+
+        if self.program is None:
+            return
+
+        # Get viewport dimensions for u_resolution
+        ratio = self.devicePixelRatio()
+        w = int(self.width() * ratio)
+        h = int(self.height() * ratio)
 
         # If we have post-processing effects, render to FBO first
         if self.post_process_stack:
-            ratio = self.devicePixelRatio()
-            w = int(self.width() * ratio)
-            h = int(self.height() * ratio)
             self._create_fbo(w, h)
             GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, self.fbo)
             GL.glViewport(0, 0, w, h)
@@ -8120,6 +11353,11 @@ void main() {{
         tex_loc = GL.glGetUniformLocation(self.program, "u_texture")
         if tex_loc >= 0:
             GL.glUniform1i(tex_loc, 0)
+
+        # Set resolution uniform (needed by many shaders)
+        res_loc = GL.glGetUniformLocation(self.program, "u_resolution")
+        if res_loc >= 0:
+            GL.glUniform2f(res_loc, float(w), float(h))
 
         # Set other uniforms
         for name, value in self.params.items():
@@ -8162,429 +11400,6 @@ void main() {{
         GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
         return fbo, texture
 
-    def _flush_fbo_to_texture(self, fbo, texture, width, height):
-        """Copy FBO content to its attached texture using glCopyTexSubImage2D.
-
-        Workaround for NVIDIA driver issue where rendering to an FBO-attached
-        texture doesn't make the content available for subsequent sampling.
-        Uses glCopyTexSubImage2D (not glCopyTexImage2D) to avoid reallocating
-        the texture storage, which would break the FBO attachment.
-        The FBO must still be bound when calling this method.
-        """
-        GL.glBindTexture(GL.GL_TEXTURE_2D, texture)
-        GL.glCopyTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, 0, 0, 0, width, height)
-
-    def _ensure_accum_fbos(self, width, height):
-        """Create or resize the two accumulation FBOs for compositing."""
-        if self.accum_fbo_size == (width, height) and self.accum_fbo_a is not None:
-            return True
-
-        # Delete old
-        for fbo_attr, tex_attr in [('accum_fbo_a', 'accum_fbo_a_texture'),
-                                    ('accum_fbo_b', 'accum_fbo_b_texture')]:
-            fbo = getattr(self, fbo_attr)
-            tex = getattr(self, tex_attr)
-            if fbo is not None:
-                GL.glDeleteFramebuffers(1, [fbo])
-                GL.glDeleteTextures([tex])
-
-        self.accum_fbo_a, self.accum_fbo_a_texture = self._create_fbo_pair(width, height)
-        if self.accum_fbo_a is None:
-            return False
-
-        self.accum_fbo_b, self.accum_fbo_b_texture = self._create_fbo_pair(width, height)
-        if self.accum_fbo_b is None:
-            GL.glDeleteFramebuffers(1, [self.accum_fbo_a])
-            GL.glDeleteTextures([self.accum_fbo_a_texture])
-            self.accum_fbo_a = None
-            return False
-
-        self.accum_fbo_size = (width, height)
-        return True
-
-    def _ensure_layer_cache_fbo(self, layer_id, width, height):
-        """Ensure a cache FBO exists for the given layer. Returns (fbo, texture)."""
-        if layer_id in self.layer_cache:
-            entry = self.layer_cache[layer_id]
-            if entry.get('size') == (width, height):
-                return entry['fbo'], entry['texture']
-            # Size changed, delete old
-            GL.glDeleteFramebuffers(1, [entry['fbo']])
-            GL.glDeleteTextures([entry['texture']])
-
-        fbo, texture = self._create_fbo_pair(width, height)
-        if fbo is None:
-            return None, None
-
-        self.layer_cache[layer_id] = {
-            'fbo': fbo, 'texture': texture, 'dirty': True, 'size': (width, height)
-        }
-        return fbo, texture
-
-    def _cleanup_layer_cache(self, active_layer_ids):
-        """Delete cached FBOs for layers that no longer exist."""
-        to_remove = [lid for lid in self.layer_cache if lid not in active_layer_ids]
-        for lid in to_remove:
-            entry = self.layer_cache.pop(lid)
-            GL.glDeleteFramebuffers(1, [entry['fbo']])
-            GL.glDeleteTextures([entry['texture']])
-
-    def _invalidate_all_layer_caches(self):
-        """Mark all cached layers as dirty (e.g., when source image changes)."""
-        for entry in self.layer_cache.values():
-            entry['dirty'] = True
-
-    def _compile_compositing_shader(self):
-        """Compile the GPU compositing shader for layer blending."""
-        try:
-            vert_shader = GL.glCreateShader(GL.GL_VERTEX_SHADER)
-            GL.glShaderSource(vert_shader, VERTEX_SHADER)
-            GL.glCompileShader(vert_shader)
-            if not GL.glGetShaderiv(vert_shader, GL.GL_COMPILE_STATUS):
-                GL.glDeleteShader(vert_shader)
-                return
-
-            frag_shader = GL.glCreateShader(GL.GL_FRAGMENT_SHADER)
-            GL.glShaderSource(frag_shader, COMPOSITING_SHADER)
-            GL.glCompileShader(frag_shader)
-            if not GL.glGetShaderiv(frag_shader, GL.GL_COMPILE_STATUS):
-                GL.glDeleteShader(vert_shader)
-                GL.glDeleteShader(frag_shader)
-                return
-
-            self.compositing_program = GL.glCreateProgram()
-            GL.glAttachShader(self.compositing_program, vert_shader)
-            GL.glAttachShader(self.compositing_program, frag_shader)
-            GL.glBindAttribLocation(self.compositing_program, 0, "in_vert")
-            GL.glBindAttribLocation(self.compositing_program, 1, "in_uv")
-            GL.glLinkProgram(self.compositing_program)
-
-            GL.glDeleteShader(vert_shader)
-            GL.glDeleteShader(frag_shader)
-
-            if not GL.glGetProgramiv(self.compositing_program, GL.GL_LINK_STATUS):
-                GL.glDeleteProgram(self.compositing_program)
-                self.compositing_program = None
-        except Exception:
-            self.compositing_program = None
-
-    def _ensure_passthrough_program(self):
-        """Compile a simple passthrough shader for blitting textures."""
-        if self.passthrough_program is not None:
-            return self.passthrough_program
-        try:
-            vert_shader = GL.glCreateShader(GL.GL_VERTEX_SHADER)
-            GL.glShaderSource(vert_shader, VERTEX_SHADER)
-            GL.glCompileShader(vert_shader)
-            if not GL.glGetShaderiv(vert_shader, GL.GL_COMPILE_STATUS):
-                GL.glDeleteShader(vert_shader)
-                return None
-
-            frag_shader = GL.glCreateShader(GL.GL_FRAGMENT_SHADER)
-            GL.glShaderSource(frag_shader, PASSTHROUGH_SHADER)
-            GL.glCompileShader(frag_shader)
-            if not GL.glGetShaderiv(frag_shader, GL.GL_COMPILE_STATUS):
-                GL.glDeleteShader(vert_shader)
-                GL.glDeleteShader(frag_shader)
-                return None
-
-            self.passthrough_program = GL.glCreateProgram()
-            GL.glAttachShader(self.passthrough_program, vert_shader)
-            GL.glAttachShader(self.passthrough_program, frag_shader)
-            GL.glBindAttribLocation(self.passthrough_program, 0, "in_vert")
-            GL.glBindAttribLocation(self.passthrough_program, 1, "in_uv")
-            GL.glLinkProgram(self.passthrough_program)
-
-            GL.glDeleteShader(vert_shader)
-            GL.glDeleteShader(frag_shader)
-
-            if not GL.glGetProgramiv(self.passthrough_program, GL.GL_LINK_STATUS):
-                GL.glDeleteProgram(self.passthrough_program)
-                self.passthrough_program = None
-                return None
-            return self.passthrough_program
-        except Exception:
-            self.passthrough_program = None
-            return None
-
-    def _update_layer_dirty_flags(self, layers):
-        """Compare layers against previous frame and mark changed layers dirty."""
-        prev_map = {l.get('id'): l for l in self._prev_layer_data}
-
-        for layer in layers:
-            lid = layer.get('id')
-            if lid is None:
-                continue
-            prev = prev_map.get(lid)
-            if prev is None:
-                # New layer
-                if lid in self.layer_cache:
-                    self.layer_cache[lid]['dirty'] = True
-            elif (layer.get('shader') != prev.get('shader') or
-                  layer.get('params') != prev.get('params')):
-                # Shader or params changed — need to re-render this layer's cache
-                if lid in self.layer_cache:
-                    self.layer_cache[lid]['dirty'] = True
-
-        # Store current as previous for next frame
-        import copy
-        self._prev_layer_data = copy.deepcopy(layers)
-
-    def _render_layer_to_cache(self, layer, width, height):
-        """Render a layer's shader effect on the original image to its cache FBO."""
-        lid = layer.get('id')
-        fbo, texture = self._ensure_layer_cache_fbo(lid, width, height)
-        if fbo is None:
-            return
-
-        shader_name = layer.get('shader', 'Original')
-        program = self.layer_programs.get(shader_name)
-        if program is None:
-            program = self._compile_layer_shader(shader_name)
-        if program is None:
-            program = self.program
-        if program is None:
-            return
-
-        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, fbo)
-        GL.glViewport(0, 0, width, height)
-        GL.glClear(GL.GL_COLOR_BUFFER_BIT)
-
-        GL.glUseProgram(program)
-        GL.glBindVertexArray(self.vao)
-
-        GL.glActiveTexture(GL.GL_TEXTURE0)
-        GL.glBindTexture(GL.GL_TEXTURE_2D, self.texture_id)
-
-        tex_loc = GL.glGetUniformLocation(program, "u_texture")
-        if tex_loc >= 0:
-            GL.glUniform1i(tex_loc, 0)
-
-        res_loc = GL.glGetUniformLocation(program, "u_resolution")
-        if res_loc >= 0:
-            GL.glUniform2f(res_loc, float(width), float(height))
-
-        for name, value in layer.get('params', {}).items():
-            loc = GL.glGetUniformLocation(program, name)
-            if loc >= 0:
-                GL.glUniform1f(loc, float(value))
-
-        GL.glDrawArrays(GL.GL_TRIANGLE_STRIP, 0, 4)
-        self._flush_fbo_to_texture(fbo, texture, width, height)
-        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
-
-        self.layer_cache[lid]['dirty'] = False
-
-    def _render_texture_to_screen(self, texture_id):
-        """Render a texture to the default framebuffer using the passthrough shader."""
-        program = self._ensure_passthrough_program()
-        if program is None:
-            return
-
-        GL.glUseProgram(program)
-        GL.glBindVertexArray(self.vao)
-
-        GL.glActiveTexture(GL.GL_TEXTURE0)
-        GL.glBindTexture(GL.GL_TEXTURE_2D, texture_id)
-
-        tex_loc = GL.glGetUniformLocation(program, "u_texture")
-        if tex_loc >= 0:
-            GL.glUniform1i(tex_loc, 0)
-
-        GL.glDrawArrays(GL.GL_TRIANGLE_STRIP, 0, 4)
-
-    def _render_with_layers(self, layers):
-        """Render composited layer stack to screen."""
-        try:
-            self._render_with_layers_composite(layers)
-        except Exception:
-            import traceback
-            traceback.print_exc()
-            if layers:
-                # Fallback: render first layer directly
-                shader_name = layers[0].get('shader', 'Original')
-                program = self.layer_programs.get(shader_name) or self._compile_layer_shader(shader_name) or self.program
-                if program:
-                    GL.glUseProgram(program)
-                    GL.glBindVertexArray(self.vao)
-                    GL.glActiveTexture(GL.GL_TEXTURE0)
-                    GL.glBindTexture(GL.GL_TEXTURE_2D, self.texture_id)
-                    tex_loc = GL.glGetUniformLocation(program, "u_texture")
-                    if tex_loc >= 0:
-                        GL.glUniform1i(tex_loc, 0)
-                    GL.glDrawArrays(GL.GL_TRIANGLE_STRIP, 0, 4)
-
-    def _render_with_layers_composite(self, layers):
-        """Compositing pipeline: render each layer independently, then blend bottom-to-top."""
-        if self.texture_id is None or not layers:
-            return
-
-        ratio = self.devicePixelRatio()
-        viewport_w = int(self.width() * ratio)
-        viewport_h = int(self.height() * ratio)
-        fbo_w, fbo_h = self.image_size
-
-        # Single layer optimization
-        if len(layers) == 1:
-            layer = layers[0]
-            lid = layer.get('id')
-            if lid is not None:
-                if lid not in self.layer_cache or self.layer_cache.get(lid, {}).get('dirty', True):
-                    self._render_layer_to_cache(layer, fbo_w, fbo_h)
-                if lid in self.layer_cache:
-                    GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
-                    GL.glViewport(0, 0, viewport_w, viewport_h)
-                    self._render_texture_to_screen(self.layer_cache[lid]['texture'])
-                    return
-            # Fallback for layers without id
-            self._render_texture_to_screen(self.texture_id)
-            return
-
-        # Multi-layer compositing
-        active_ids = {l.get('id') for l in layers if l.get('id') is not None}
-        self._update_layer_dirty_flags(layers)
-        self._cleanup_layer_cache(active_ids)
-
-        if not self._ensure_accum_fbos(fbo_w, fbo_h):
-            self._render_texture_to_screen(self.texture_id)
-            return
-
-        if self.compositing_program is None:
-            self._compile_compositing_shader()
-        if self.compositing_program is None:
-            self._render_texture_to_screen(self.texture_id)
-            return
-
-        # Phase 1: Render dirty layers to their cache FBOs
-        for layer in layers:
-            lid = layer.get('id')
-            if lid is None:
-                continue
-            cache = self.layer_cache.get(lid)
-            if cache is None or cache.get('dirty', True):
-                self._render_layer_to_cache(layer, fbo_w, fbo_h)
-
-        # Phase 2: Composite bottom-to-top using ping-pong accumulation
-        accum_fbos = [self.accum_fbo_a, self.accum_fbo_b]
-        accum_textures = [self.accum_fbo_a_texture, self.accum_fbo_b_texture]
-        read_idx = 0  # Which accum buffer holds current result
-        first_enabled = True
-
-        for layer in layers:
-            lid = layer.get('id')
-            if lid is None or lid not in self.layer_cache:
-                continue
-
-            layer_tex = self.layer_cache[lid]['texture']
-
-            if first_enabled:
-                # Base layer: copy to accumulation buffer A
-                GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, accum_fbos[0])
-                GL.glViewport(0, 0, fbo_w, fbo_h)
-                GL.glClear(GL.GL_COLOR_BUFFER_BIT)
-
-                opacity = layer.get('opacity', 1.0)
-                if opacity >= 1.0:
-                    self._render_texture_to_screen_fbo(layer_tex, fbo_w, fbo_h)
-                else:
-                    # For base layer with < 1.0 opacity, blend with black
-                    GL.glEnable(GL.GL_BLEND)
-                    GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
-                    self._render_texture_with_alpha(layer_tex, opacity, fbo_w, fbo_h)
-                    GL.glDisable(GL.GL_BLEND)
-
-                self._flush_fbo_to_texture(accum_fbos[0], accum_textures[0], fbo_w, fbo_h)
-                read_idx = 0
-                first_enabled = False
-            else:
-                # Composite this layer onto accumulation
-                write_idx = 1 - read_idx
-
-                GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, accum_fbos[write_idx])
-                GL.glViewport(0, 0, fbo_w, fbo_h)
-                GL.glClear(GL.GL_COLOR_BUFFER_BIT)
-
-                GL.glUseProgram(self.compositing_program)
-                GL.glBindVertexArray(self.vao)
-
-                # u_base = accumulation result (texture unit 0)
-                GL.glActiveTexture(GL.GL_TEXTURE0)
-                GL.glBindTexture(GL.GL_TEXTURE_2D, accum_textures[read_idx])
-                base_loc = GL.glGetUniformLocation(self.compositing_program, "u_base")
-                if base_loc >= 0:
-                    GL.glUniform1i(base_loc, 0)
-
-                # u_overlay = this layer's cache (texture unit 1)
-                GL.glActiveTexture(GL.GL_TEXTURE1)
-                GL.glBindTexture(GL.GL_TEXTURE_2D, layer_tex)
-                overlay_loc = GL.glGetUniformLocation(self.compositing_program, "u_overlay")
-                if overlay_loc >= 0:
-                    GL.glUniform1i(overlay_loc, 1)
-
-                # Set blend mode and opacity
-                opacity_loc = GL.glGetUniformLocation(self.compositing_program, "u_opacity")
-                if opacity_loc >= 0:
-                    GL.glUniform1f(opacity_loc, float(layer.get('opacity', 1.0)))
-
-                mode_loc = GL.glGetUniformLocation(self.compositing_program, "u_blend_mode")
-                if mode_loc >= 0:
-                    blend_mode = layer.get('blend_mode', 'normal')
-                    GL.glUniform1i(mode_loc, BLEND_MODES.get(blend_mode, 0))
-
-                GL.glDrawArrays(GL.GL_TRIANGLE_STRIP, 0, 4)
-                self._flush_fbo_to_texture(accum_fbos[write_idx], accum_textures[write_idx], fbo_w, fbo_h)
-
-                read_idx = write_idx
-
-        # Phase 3: Render final accumulation to screen
-        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
-        GL.glViewport(0, 0, viewport_w, viewport_h)
-
-        if not first_enabled:
-            self._render_texture_to_screen(accum_textures[read_idx])
-        else:
-            self._render_texture_to_screen(self.texture_id)
-
-        # Reset texture unit to 0
-        GL.glActiveTexture(GL.GL_TEXTURE0)
-
-    def _render_texture_to_screen_fbo(self, texture_id, width, height):
-        """Render a texture to the currently bound FBO (not the screen)."""
-        program = self._ensure_passthrough_program()
-        if program is None:
-            return
-
-        GL.glUseProgram(program)
-        GL.glBindVertexArray(self.vao)
-
-        GL.glActiveTexture(GL.GL_TEXTURE0)
-        GL.glBindTexture(GL.GL_TEXTURE_2D, texture_id)
-
-        tex_loc = GL.glGetUniformLocation(program, "u_texture")
-        if tex_loc >= 0:
-            GL.glUniform1i(tex_loc, 0)
-
-        GL.glDrawArrays(GL.GL_TRIANGLE_STRIP, 0, 4)
-
-    def _render_texture_with_alpha(self, texture_id, opacity, width, height):
-        """Render a texture with a given opacity to the currently bound FBO.
-        Uses the compositing shader to blend the texture against a transparent/black base."""
-        # For base layer opacity < 1.0, just use passthrough and let the alpha handle it
-        program = self._ensure_passthrough_program()
-        if program is None:
-            return
-
-        GL.glUseProgram(program)
-        GL.glBindVertexArray(self.vao)
-
-        GL.glActiveTexture(GL.GL_TEXTURE0)
-        GL.glBindTexture(GL.GL_TEXTURE_2D, texture_id)
-
-        tex_loc = GL.glGetUniformLocation(program, "u_texture")
-        if tex_loc >= 0:
-            GL.glUniform1i(tex_loc, 0)
-
-        GL.glDrawArrays(GL.GL_TRIANGLE_STRIP, 0, 4)
 
     def _apply_post_processing(self):
         """Apply the post-processing shader stack."""
@@ -8634,6 +11449,11 @@ void main() {{
 
     def _paint_3d(self, w, h):
         """Render 3D model with shader effect."""
+        # If viewing an AOV pass, use the AOV renderer instead
+        if self.render_pass_mode != "combined" and self.render_pass_mode in AOV_SHADERS:
+            self._paint_3d_aov(self.render_pass_mode, w, h)
+            return
+
         if self.program_3d is None or self.vao_3d is None:
             return
 
@@ -8818,9 +11638,8 @@ void main() {{
         self.set_auto_rotate(False)
         self.update()
 
-    def export_to_image(self, width=None, height=None, layers=None):
+    def export_to_image(self, width=None, height=None):
         """Export the current render to an image array.
-        If layers is provided, the full shader layer chain is applied.
         Renders at original image size for maximum quality.
         """
         self.makeCurrent()
@@ -8837,12 +11656,7 @@ void main() {{
 
         # 2D export path
         GL.glDisable(GL.GL_DEPTH_TEST)
-        enabled_layers = [l for l in (layers or []) if l.get('enabled', True)]
-
-        if enabled_layers:
-            return self._export_2d_with_layers(enabled_layers, width, height)
-        else:
-            return self._export_2d_single(self.program, self.params, width, height)
+        return self._export_2d_single(self.program, self.params, width, height)
 
     def _export_2d_single(self, program, params, width, height):
         """Render a single shader pass to an FBO and read back pixels."""
@@ -8897,155 +11711,6 @@ void main() {{
         GL.glDeleteTextures([tex])
         return image_data
 
-    def _export_2d_with_layers(self, layers, width, height):
-        """Composite layer stack at export resolution and read back pixels."""
-        import numpy as np
-
-        if not layers:
-            return self._export_2d_single(self.program, self.params, width, height)
-
-        # Single layer: simple export
-        if len(layers) == 1:
-            layer = layers[0]
-            shader_name = layer.get('shader', 'Original')
-            prog = self.layer_programs.get(shader_name) or self._compile_layer_shader(shader_name)
-            if not prog:
-                prog = self.program
-            return self._export_2d_single(prog, layer.get('params', {}), width, height)
-
-        # Multi-layer: create temporary FBOs at export resolution
-        # Per-layer FBOs
-        layer_fbos = []
-        for layer in layers:
-            fbo, tex = self._create_fbo_pair(width, height)
-            if fbo is None:
-                # Cleanup on failure
-                for f, t in layer_fbos:
-                    GL.glDeleteFramebuffers(1, [f])
-                    GL.glDeleteTextures([t])
-                return None
-            layer_fbos.append((fbo, tex))
-
-        # Accumulation FBOs
-        accum_a_fbo, accum_a_tex = self._create_fbo_pair(width, height)
-        accum_b_fbo, accum_b_tex = self._create_fbo_pair(width, height)
-        if accum_a_fbo is None or accum_b_fbo is None:
-            for f, t in layer_fbos:
-                GL.glDeleteFramebuffers(1, [f])
-                GL.glDeleteTextures([t])
-            if accum_a_fbo:
-                GL.glDeleteFramebuffers(1, [accum_a_fbo])
-                GL.glDeleteTextures([accum_a_tex])
-            return None
-
-        if self.compositing_program is None:
-            self._compile_compositing_shader()
-
-        # Phase 1: Render each layer
-        for i, layer in enumerate(layers):
-            shader_name = layer.get('shader', 'Original')
-            prog = self.layer_programs.get(shader_name) or self._compile_layer_shader(shader_name)
-            if not prog:
-                prog = self.program
-            if not prog:
-                continue
-
-            fbo, tex = layer_fbos[i]
-            GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, fbo)
-            GL.glViewport(0, 0, width, height)
-            GL.glClear(GL.GL_COLOR_BUFFER_BIT)
-
-            GL.glUseProgram(prog)
-            GL.glBindVertexArray(self.vao)
-            GL.glActiveTexture(GL.GL_TEXTURE0)
-            GL.glBindTexture(GL.GL_TEXTURE_2D, self.texture_id)
-
-            tex_loc = GL.glGetUniformLocation(prog, "u_texture")
-            if tex_loc >= 0:
-                GL.glUniform1i(tex_loc, 0)
-            res_loc = GL.glGetUniformLocation(prog, "u_resolution")
-            if res_loc >= 0:
-                GL.glUniform2f(res_loc, float(width), float(height))
-
-            for name, value in layer.get('params', {}).items():
-                loc = GL.glGetUniformLocation(prog, name)
-                if loc >= 0:
-                    GL.glUniform1f(loc, float(value))
-
-            GL.glDrawArrays(GL.GL_TRIANGLE_STRIP, 0, 4)
-            self._flush_fbo_to_texture(fbo, tex, width, height)
-
-        # Phase 2: Composite
-        accum_fbos = [accum_a_fbo, accum_b_fbo]
-        accum_textures = [accum_a_tex, accum_b_tex]
-        read_idx = 0
-        first_enabled = True
-
-        for i, layer in enumerate(layers):
-            _, layer_tex = layer_fbos[i]
-
-            if first_enabled:
-                GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, accum_fbos[0])
-                GL.glViewport(0, 0, width, height)
-                GL.glClear(GL.GL_COLOR_BUFFER_BIT)
-                self._render_texture_to_screen_fbo(layer_tex, width, height)
-                self._flush_fbo_to_texture(accum_fbos[0], accum_textures[0], width, height)
-                read_idx = 0
-                first_enabled = False
-            else:
-                write_idx = 1 - read_idx
-
-                GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, accum_fbos[write_idx])
-                GL.glViewport(0, 0, width, height)
-                GL.glClear(GL.GL_COLOR_BUFFER_BIT)
-
-                GL.glUseProgram(self.compositing_program)
-                GL.glBindVertexArray(self.vao)
-
-                GL.glActiveTexture(GL.GL_TEXTURE0)
-                GL.glBindTexture(GL.GL_TEXTURE_2D, accum_textures[read_idx])
-                base_loc = GL.glGetUniformLocation(self.compositing_program, "u_base")
-                if base_loc >= 0:
-                    GL.glUniform1i(base_loc, 0)
-
-                GL.glActiveTexture(GL.GL_TEXTURE1)
-                GL.glBindTexture(GL.GL_TEXTURE_2D, layer_tex)
-                overlay_loc = GL.glGetUniformLocation(self.compositing_program, "u_overlay")
-                if overlay_loc >= 0:
-                    GL.glUniform1i(overlay_loc, 1)
-
-                opacity_loc = GL.glGetUniformLocation(self.compositing_program, "u_opacity")
-                if opacity_loc >= 0:
-                    GL.glUniform1f(opacity_loc, float(layer.get('opacity', 1.0)))
-
-                mode_loc = GL.glGetUniformLocation(self.compositing_program, "u_blend_mode")
-                if mode_loc >= 0:
-                    blend_mode = layer.get('blend_mode', 'normal')
-                    GL.glUniform1i(mode_loc, BLEND_MODES.get(blend_mode, 0))
-
-                GL.glDrawArrays(GL.GL_TRIANGLE_STRIP, 0, 4)
-                self._flush_fbo_to_texture(accum_fbos[write_idx], accum_textures[write_idx], width, height)
-                read_idx = write_idx
-
-        # Phase 3: Read pixels from final accumulation
-        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, accum_fbos[read_idx])
-        pixels = GL.glReadPixels(0, 0, width, height, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
-        image_data = np.frombuffer(pixels, dtype=np.uint8).reshape(height, width, 4).copy()
-        image_data = np.flipud(image_data)
-
-        # Cleanup
-        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
-        GL.glActiveTexture(GL.GL_TEXTURE0)
-        for f, t in layer_fbos:
-            GL.glDeleteFramebuffers(1, [f])
-            GL.glDeleteTextures([t])
-        GL.glDeleteFramebuffers(1, [accum_a_fbo])
-        GL.glDeleteTextures([accum_a_tex])
-        GL.glDeleteFramebuffers(1, [accum_b_fbo])
-        GL.glDeleteTextures([accum_b_tex])
-
-        return image_data
-
     def _export_3d(self, width, height):
         """Export 3D scene to image."""
         fbo = GL.glGenFramebuffers(1)
@@ -9087,6 +11752,124 @@ void main() {{
         GL.glDeleteTextures([tex])
         GL.glDeleteRenderbuffers(1, [depth_rb])
         return image_data
+
+    # --- AOV Render Passes ---
+
+    def _compile_aov_shader(self, pass_name):
+        """Compile an AOV fragment shader for the given pass name."""
+        if pass_name in self.aov_programs:
+            return self.aov_programs[pass_name]
+        frag_src = AOV_SHADERS.get(pass_name)
+        if frag_src is None:
+            return None
+        vert_shader = GL.glCreateShader(GL.GL_VERTEX_SHADER)
+        GL.glShaderSource(vert_shader, VERTEX_SHADER_3D)
+        GL.glCompileShader(vert_shader)
+        if not GL.glGetShaderiv(vert_shader, GL.GL_COMPILE_STATUS):
+            print(f"[AOV] Vertex shader error: {GL.glGetShaderInfoLog(vert_shader).decode()}")
+            return None
+        frag_shader = GL.glCreateShader(GL.GL_FRAGMENT_SHADER)
+        GL.glShaderSource(frag_shader, frag_src)
+        GL.glCompileShader(frag_shader)
+        if not GL.glGetShaderiv(frag_shader, GL.GL_COMPILE_STATUS):
+            print(f"[AOV] Fragment shader error ({pass_name}): {GL.glGetShaderInfoLog(frag_shader).decode()}")
+            return None
+        program = GL.glCreateProgram()
+        GL.glAttachShader(program, vert_shader)
+        GL.glAttachShader(program, frag_shader)
+        GL.glLinkProgram(program)
+        if not GL.glGetProgramiv(program, GL.GL_LINK_STATUS):
+            print(f"[AOV] Link error ({pass_name}): {GL.glGetProgramInfoLog(program).decode()}")
+            return None
+        GL.glDeleteShader(vert_shader)
+        GL.glDeleteShader(frag_shader)
+        self.aov_programs[pass_name] = program
+        return program
+
+    def _paint_3d_aov(self, pass_name, w, h):
+        """Render a 3D AOV pass to the current framebuffer."""
+        program = self._compile_aov_shader(pass_name)
+        if program is None or self.vao_3d is None:
+            return
+        GL.glEnable(GL.GL_DEPTH_TEST)
+        GL.glUseProgram(program)
+        GL.glBindVertexArray(self.vao_3d)
+        # Bind texture
+        GL.glActiveTexture(GL.GL_TEXTURE0)
+        if self.texture_id is not None:
+            GL.glBindTexture(GL.GL_TEXTURE_2D, self.texture_id)
+        tex_loc = GL.glGetUniformLocation(program, "u_texture")
+        if tex_loc >= 0:
+            GL.glUniform1i(tex_loc, 0)
+        # Transform matrices
+        aspect = w / h if h > 0 else 1.0
+        model = self._make_rotation_matrix()
+        view = self._make_view_matrix()
+        projection = self._make_perspective_matrix(45.0, aspect, 0.1, 100.0)
+        model_loc = GL.glGetUniformLocation(program, "u_model")
+        view_loc = GL.glGetUniformLocation(program, "u_view")
+        proj_loc = GL.glGetUniformLocation(program, "u_projection")
+        if model_loc >= 0:
+            GL.glUniformMatrix4fv(model_loc, 1, GL.GL_TRUE, model)
+        if view_loc >= 0:
+            GL.glUniformMatrix4fv(view_loc, 1, GL.GL_TRUE, view)
+        if proj_loc >= 0:
+            GL.glUniformMatrix4fv(proj_loc, 1, GL.GL_TRUE, projection)
+        # Depth pass specific uniforms
+        if pass_name == "depth":
+            near_loc = GL.glGetUniformLocation(program, "u_near")
+            far_loc = GL.glGetUniformLocation(program, "u_far")
+            if near_loc >= 0:
+                GL.glUniform1f(near_loc, 0.1)
+            if far_loc >= 0:
+                GL.glUniform1f(far_loc, 100.0)
+        GL.glDrawArrays(GL.GL_TRIANGLES, 0, self.model_vertex_count)
+
+    def _render_aov_pass(self, pass_name, width, height):
+        """Render an AOV pass to an FBO and return numpy array."""
+        fbo = GL.glGenFramebuffers(1)
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, fbo)
+        tex = GL.glGenTextures(1)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, tex)
+        GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA8, width, height, 0,
+                        GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, None)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
+        GL.glFramebufferTexture2D(GL.GL_FRAMEBUFFER, GL.GL_COLOR_ATTACHMENT0,
+                                  GL.GL_TEXTURE_2D, tex, 0)
+        depth_rb = GL.glGenRenderbuffers(1)
+        GL.glBindRenderbuffer(GL.GL_RENDERBUFFER, depth_rb)
+        GL.glRenderbufferStorage(GL.GL_RENDERBUFFER, GL.GL_DEPTH_COMPONENT24, width, height)
+        GL.glFramebufferRenderbuffer(GL.GL_FRAMEBUFFER, GL.GL_DEPTH_ATTACHMENT,
+                                     GL.GL_RENDERBUFFER, depth_rb)
+        if GL.glCheckFramebufferStatus(GL.GL_FRAMEBUFFER) != GL.GL_FRAMEBUFFER_COMPLETE:
+            GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
+            GL.glDeleteFramebuffers(1, [fbo])
+            GL.glDeleteTextures([tex])
+            GL.glDeleteRenderbuffers(1, [depth_rb])
+            return None
+        GL.glViewport(0, 0, width, height)
+        GL.glClearColor(0.0, 0.0, 0.0, 1.0)
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
+        self._paint_3d_aov(pass_name, width, height)
+        GL.glFinish()
+        pixels = GL.glReadPixels(0, 0, width, height, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+        image_data = np.frombuffer(pixels, dtype=np.uint8).reshape(height, width, 4).copy()
+        image_data = np.flipud(image_data)
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
+        GL.glDeleteFramebuffers(1, [fbo])
+        GL.glDeleteTextures([tex])
+        GL.glDeleteRenderbuffers(1, [depth_rb])
+        return image_data
+
+    def _export_all_passes(self, width, height):
+        """Export all AOV passes as a dict of numpy arrays."""
+        self.makeCurrent()
+        result = {}
+        result["combined"] = self._export_3d(width, height)
+        for pass_name in AOV_SHADERS:
+            result[pass_name] = self._render_aov_pass(pass_name, width, height)
+        return result
 
     def _make_rotation_matrix(self):
         """Create rotation matrix from Euler angles."""
@@ -9340,665 +12123,94 @@ class ParameterSlider(QtWidgets.QWidget):
         self.label.setText(f"{display_name}: {value:.2f}")
 
 
-class ShaderLayerWidget(QtWidgets.QFrame):
-    """Widget representing a single shader layer in the compositing stack."""
-
-    layerChanged = QtCore.pyqtSignal()
-    layerRemoved = QtCore.pyqtSignal(object)
-    layerMoved = QtCore.pyqtSignal(object, int)
-    layerSelected = QtCore.pyqtSignal(object)
-    layerDuplicated = QtCore.pyqtSignal(object)
-
-    # Short labels for blend modes
-    _BLEND_ABBREV = {
-        "normal": "N", "multiply": "M", "screen": "S", "overlay": "O",
-        "soft_light": "SL", "hard_light": "HL", "add": "+", "subtract": "-",
-        "difference": "D", "exclusion": "E", "color_dodge": "CD", "color_burn": "CB",
-    }
-
-    def __init__(self, layer_id, parent_panel=None, is_base_layer=False):
-        super().__init__()
-        self.layer_id = layer_id
-        self.layer_name = f"Layer_{layer_id}"
-        self.shader_name = "Original"
-        self.params = {}
-        self.enabled = True
-        self.opacity = 1.0
-        self.blend_mode = "normal"
-        self.is_base_layer = is_base_layer
-        self.is_selected = False
-        self._initializing = True
-
-        self._update_style()
-        self._setup_ui()
-        self._initializing = False
-
-    def _update_style(self):
-        if self.is_selected:
-            border_color = "#6a9fda"
-            bg_color = "#3a4a5a"
-        else:
-            border_color = "#444"
-            bg_color = "#2d2d2d"
-
-        base_indicator = "border-left: 3px solid #5a9a5a;" if self.is_base_layer else ""
-
-        self.setStyleSheet(f"""
-            ShaderLayerWidget {{
-                background-color: {bg_color};
-                border: 1px solid {border_color};
-                border-radius: 4px;
-                margin: 2px;
-                {base_indicator}
-            }}
-        """)
-
-    def set_selected(self, selected):
-        self.is_selected = selected
-        self._update_style()
-
-    def mousePressEvent(self, event):
-        super().mousePressEvent(event)
-        self.layerSelected.emit(self)
-
-    def _setup_ui(self):
-        layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(6, 4, 6, 4)
-        layout.setSpacing(4)
-
-        # Visibility toggle
-        self.visible_cb = QtWidgets.QCheckBox()
-        self.visible_cb.setChecked(True)
-        self.visible_cb.setFixedWidth(20)
-        self.visible_cb.setToolTip("Enable/Disable Layer")
-        self.visible_cb.toggled.connect(self._on_visibility_changed)
-        layout.addWidget(self.visible_cb)
-
-        # Editable layer name
-        self.name_edit = QtWidgets.QLineEdit(self.layer_name)
-        self.name_edit.setStyleSheet("""
-            QLineEdit {
-                background-color: transparent;
-                border: none;
-                color: #ddd;
-                font-size: 11px;
-                padding: 2px;
-            }
-            QLineEdit:focus {
-                background-color: #3a3a3a;
-                border: 1px solid #555;
-            }
-        """)
-        self.name_edit.editingFinished.connect(self._on_name_changed)
-        layout.addWidget(self.name_edit, 1)
-
-        # Shader indicator
-        self.shader_label = QtWidgets.QLabel(f"({self.shader_name})")
-        self.shader_label.setStyleSheet("color: #888; font-size: 10px;")
-        self.shader_label.setToolTip("Shader - change in Inspector")
-        layout.addWidget(self.shader_label)
-
-        # Blend mode abbreviation
-        self.blend_label = QtWidgets.QLabel(self._BLEND_ABBREV.get(self.blend_mode, "N"))
-        self.blend_label.setStyleSheet("color: #7aa; font-size: 9px; font-weight: bold;")
-        self.blend_label.setFixedWidth(20)
-        self.blend_label.setToolTip("Blend Mode - change in Inspector")
-        layout.addWidget(self.blend_label)
-
-        # Move up
-        self.up_btn = QtWidgets.QPushButton("▲")
-        self.up_btn.setFixedSize(20, 20)
-        self.up_btn.setStyleSheet("background-color: #3a3a5a; font-size: 8px;")
-        self.up_btn.setToolTip("Move Up")
-        self.up_btn.clicked.connect(lambda: self.layerMoved.emit(self, -1))
-        layout.addWidget(self.up_btn)
-
-        # Move down
-        self.down_btn = QtWidgets.QPushButton("▼")
-        self.down_btn.setFixedSize(20, 20)
-        self.down_btn.setStyleSheet("background-color: #3a3a5a; font-size: 8px;")
-        self.down_btn.setToolTip("Move Down")
-        self.down_btn.clicked.connect(lambda: self.layerMoved.emit(self, 1))
-        layout.addWidget(self.down_btn)
-
-        # Duplicate button
-        self.dup_btn = QtWidgets.QPushButton("⧉")
-        self.dup_btn.setFixedSize(20, 20)
-        self.dup_btn.setStyleSheet("background-color: #3a5a3a; font-size: 10px;")
-        self.dup_btn.setToolTip("Duplicate Layer")
-        self.dup_btn.clicked.connect(lambda: self.layerDuplicated.emit(self))
-        layout.addWidget(self.dup_btn)
-
-        # Remove button (hidden for base layer)
-        self.remove_btn = QtWidgets.QPushButton("×")
-        self.remove_btn.setFixedSize(20, 20)
-        self.remove_btn.setStyleSheet("background-color: #5a2d2d;")
-        self.remove_btn.setToolTip("Remove Layer")
-        self.remove_btn.clicked.connect(lambda: self.layerRemoved.emit(self))
-        if self.is_base_layer:
-            self.remove_btn.hide()
-        layout.addWidget(self.remove_btn)
-
-    def _on_visibility_changed(self, checked):
-        self.enabled = checked
-        if not self._initializing:
-            self.layerChanged.emit()
-
-    def _on_name_changed(self):
-        self.layer_name = self.name_edit.text()
-        if not self._initializing:
-            self.layerChanged.emit()
-
-    def set_shader(self, shader_name):
-        self.shader_name = shader_name
-        self.shader_label.setText(f"({shader_name})")
-        shader_def = SHADERS.get(shader_name, {})
-        uniforms = shader_def.get("uniforms", {})
-        self.params = {name: props.get("default", 0.0) for name, props in uniforms.items()}
-        if not self._initializing:
-            self.layerChanged.emit()
-
-    def set_opacity(self, opacity):
-        self.opacity = opacity
-        if not self._initializing:
-            self.layerChanged.emit()
-
-    def set_blend_mode(self, mode):
-        self.blend_mode = mode
-        self.blend_label.setText(self._BLEND_ABBREV.get(mode, "N"))
-        if not self._initializing:
-            self.layerChanged.emit()
-
-    def set_param(self, name, value):
-        self.params[name] = value
-        if not self._initializing:
-            self.layerChanged.emit()
-
-    def get_layer_data(self):
-        return {
-            'id': self.layer_id,
-            'shader': self.shader_name,
-            'params': self.params.copy(),
-            'enabled': self.enabled,
-            'opacity': self.opacity,
-            'blend_mode': self.blend_mode,
-            'name': self.layer_name,
-            'is_base': self.is_base_layer,
-        }
-
-
-class ShaderLayerPanel(QtWidgets.QWidget):
-    """Panel for managing multiple shader layers with compositing."""
-
-    layersChanged = QtCore.pyqtSignal(object)
-    layerSelected = QtCore.pyqtSignal(object)
-
-    def __init__(self):
-        super().__init__()
-        self.layers = []
-        self.next_layer_id = 0
-        self.selected_layer = None
-        self.base_layer = None
-
-        self._setup_ui()
-
-    def _setup_ui(self):
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
-
-        # Header
-        header = QtWidgets.QHBoxLayout()
-        title = QtWidgets.QLabel("Shader Layers")
-        title.setStyleSheet("font-size: 13px; font-weight: bold; color: #fff;")
-        header.addWidget(title)
-
-        header.addStretch()
-
-        # Duplicate button
-        dup_btn = QtWidgets.QPushButton("Duplicate")
-        dup_btn.setStyleSheet("background-color: #3a5a3a; padding: 4px 8px;")
-        dup_btn.clicked.connect(self.duplicate_layer)
-        header.addWidget(dup_btn)
-
-        # Add layer button
-        add_btn = QtWidgets.QPushButton("+ Add Layer")
-        add_btn.setStyleSheet("background-color: #3a6a3a; padding: 4px 8px;")
-        add_btn.clicked.connect(self.add_layer)
-        header.addWidget(add_btn)
-
-        layout.addLayout(header)
-
-        # Scroll area for layers
-        scroll = QtWidgets.QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-        scroll.setMaximumHeight(300)
-
-        self.layers_container = QtWidgets.QWidget()
-        self.layers_layout = QtWidgets.QVBoxLayout(self.layers_container)
-        self.layers_layout.setContentsMargins(0, 0, 0, 0)
-        self.layers_layout.setSpacing(2)
-        self.layers_layout.addStretch()
-
-        scroll.setWidget(self.layers_container)
-        layout.addWidget(scroll)
-
-        # Info label
-        self.info_label = QtWidgets.QLabel("Add layers to stack multiple shader effects")
-        self.info_label.setStyleSheet("color: #666; font-size: 10px; font-style: italic;")
-        self.info_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.info_label)
-
-    def _connect_layer_signals(self, layer):
-        layer.layerChanged.connect(self._on_layer_changed)
-        layer.layerRemoved.connect(self._remove_layer)
-        layer.layerMoved.connect(self._move_layer)
-        layer.layerSelected.connect(self._on_layer_selected)
-        layer.layerDuplicated.connect(self._on_layer_duplicated)
-
-    def create_base_layer(self, shader_name="Original"):
-        self.clear_layers()
-
-        self.base_layer = ShaderLayerWidget(self.next_layer_id, self, is_base_layer=True)
-        self.next_layer_id += 1
-        self.base_layer.set_shader(shader_name)
-        self._connect_layer_signals(self.base_layer)
-
-        self.layers_layout.insertWidget(self.layers_layout.count() - 1, self.base_layer)
-        self.layers.append(self.base_layer)
-
-        self._select_layer(self.base_layer)
-        self._update_info_label()
-        self._emit_layers()
-        return self.base_layer
-
-    def add_layer(self, shader_name=None):
-        if not isinstance(shader_name, str):
-            shader_name = "Original"
-
-        if not self.base_layer:
-            self.create_base_layer("Original")
-
-        layer = ShaderLayerWidget(self.next_layer_id, self, is_base_layer=False)
-        self.next_layer_id += 1
-        layer.set_shader(shader_name)
-        self._connect_layer_signals(layer)
-
-        self.layers_layout.insertWidget(self.layers_layout.count() - 1, layer)
-        self.layers.append(layer)
-
-        self._select_layer(layer)
-        self._update_info_label()
-        self._emit_layers()
-        return layer
-
-    def duplicate_layer(self):
-        if not self.selected_layer:
-            return
-        source = self.selected_layer
-
-        new_layer = ShaderLayerWidget(self.next_layer_id, self, is_base_layer=False)
-        self.next_layer_id += 1
-        new_layer._initializing = True
-        new_layer.set_shader(source.shader_name)
-        new_layer.opacity = source.opacity
-        new_layer.blend_mode = source.blend_mode
-        new_layer.blend_label.setText(new_layer._BLEND_ABBREV.get(source.blend_mode, "N"))
-        for name, value in source.params.items():
-            new_layer.params[name] = value
-        new_layer.layer_name = f"{source.layer_name} (copy)"
-        new_layer.name_edit.setText(new_layer.layer_name)
-        new_layer._initializing = False
-
-        self._connect_layer_signals(new_layer)
-
-        idx = self.layers.index(source)
-        self.layers.insert(idx + 1, new_layer)
-        self._rebuild_layout()
-        self._select_layer(new_layer)
-        self._update_info_label()
-        self._emit_layers()
-
-    def _on_layer_duplicated(self, layer):
-        self.selected_layer = layer
-        self.duplicate_layer()
-
-    def _on_layer_selected(self, layer):
-        self._select_layer(layer)
-
-    def _select_layer(self, layer):
-        for l in self.layers:
-            l.set_selected(False)
-        if layer:
-            layer.set_selected(True)
-            self.selected_layer = layer
-            self.layerSelected.emit(layer.get_layer_data())
-
-    def _remove_layer(self, layer):
-        if layer in self.layers:
-            was_selected = (layer == self.selected_layer)
-            self.layers.remove(layer)
-            self.layers_layout.removeWidget(layer)
-            layer.deleteLater()
-
-            if was_selected:
-                if self.layers:
-                    self._select_layer(self.layers[-1])
-                else:
-                    self.selected_layer = None
-
-            self._update_info_label()
-            self._emit_layers()
-
-    def _move_layer(self, layer, direction):
-        if layer not in self.layers:
-            return
-        idx = self.layers.index(layer)
-        new_idx = idx + direction
-        if 0 <= new_idx < len(self.layers):
-            self.layers[idx], self.layers[new_idx] = self.layers[new_idx], self.layers[idx]
-            self._rebuild_layout()
-            self._emit_layers()
-
-    def _rebuild_layout(self):
-        while self.layers_layout.count() > 1:  # Keep stretch
-            self.layers_layout.takeAt(0)
-        for l in self.layers:
-            self.layers_layout.insertWidget(self.layers_layout.count() - 1, l)
-
-    def _on_layer_changed(self):
-        self._emit_layers()
-
-    def _emit_layers(self):
-        layer_data = [layer.get_layer_data() for layer in self.layers]
-        self.layersChanged.emit(layer_data)
-
-    def _update_info_label(self):
-        count = len(self.layers)
-        if count == 0:
-            self.info_label.setText("Add layers to stack multiple shader effects")
-        elif count == 1:
-            self.info_label.setText("1 layer active")
-        else:
-            self.info_label.setText(f"{count} layers active (bottom to top)")
-
-    def get_all_layers(self):
-        return [layer.get_layer_data() for layer in self.layers]
-
-    def clear_layers(self):
-        for layer in self.layers[:]:
-            self.layers_layout.removeWidget(layer)
-            layer.deleteLater()
-        self.layers.clear()
-        self.base_layer = None
-        self.selected_layer = None
-        self.next_layer_id = 0
-        self._update_info_label()
-
-    def update_selected_layer_shader(self, shader_name):
-        if self.selected_layer:
-            self.selected_layer.set_shader(shader_name)
-
-    def update_selected_layer_param(self, param_name, value):
-        if self.selected_layer:
-            self.selected_layer.set_param(param_name, value)
-
-    def get_selected_layer(self):
-        return self.selected_layer
-
-    def get_layer_stack_data(self):
-        """Return serializable layer stack data for preset persistence."""
-        stack = []
-        for layer in self.layers:
-            data = layer.get_layer_data()
-            # Exclude runtime-only fields
-            stack.append({
-                'name': data['name'],
-                'shader': data['shader'],
-                'params': data['params'],
-                'opacity': data['opacity'],
-                'blend_mode': data['blend_mode'],
-                'enabled': data['enabled'],
-                'is_base': data['is_base'],
-            })
-        return stack
-
-    def restore_layer_stack(self, stack_data):
-        """Restore layers from serialized stack data (e.g., from a preset)."""
-        self.clear_layers()
-        for i, layer_data in enumerate(stack_data):
-            is_base = layer_data.get('is_base', i == 0)
-            layer = ShaderLayerWidget(self.next_layer_id, self, is_base_layer=is_base)
-            self.next_layer_id += 1
-            layer._initializing = True
-            layer.set_shader(layer_data.get('shader', 'Original'))
-            layer.opacity = layer_data.get('opacity', 1.0)
-            layer.blend_mode = layer_data.get('blend_mode', 'normal')
-            layer.blend_label.setText(layer._BLEND_ABBREV.get(layer.blend_mode, "N"))
-            layer.enabled = layer_data.get('enabled', True)
-            layer.visible_cb.setChecked(layer.enabled)
-            layer.layer_name = layer_data.get('name', f"Layer_{layer.layer_id}")
-            layer.name_edit.setText(layer.layer_name)
-            for name, value in layer_data.get('params', {}).items():
-                layer.params[name] = value
-            layer._initializing = False
-
-            if is_base:
-                self.base_layer = layer
-
-            self._connect_layer_signals(layer)
-            self.layers_layout.insertWidget(self.layers_layout.count() - 1, layer)
-            self.layers.append(layer)
-
-        if self.layers:
-            self._select_layer(self.layers[0])
-        self._update_info_label()
-        self._emit_layers()
-
-
-class ShaderNodeWidget(QtWidgets.QGraphicsItem):
-    """A node in the shader graph."""
-
-    def __init__(self, node_type, name, x=0, y=0):
-        super().__init__()
-        self.node_type = node_type
-        self.name = name
-        self.inputs = []
-        self.outputs = []
-        self.width = 150
-        self.height = 80
-        self.setPos(x, y)
-        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
-        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
-
-        # Define node ports based on type
-        if node_type == "texture":
-            self.outputs = [("color", "vec4")]
-        elif node_type == "math":
-            self.inputs = [("a", "float"), ("b", "float")]
-            self.outputs = [("result", "float")]
-        elif node_type == "mix":
-            self.inputs = [("a", "vec3"), ("b", "vec3"), ("factor", "float")]
-            self.outputs = [("result", "vec3")]
-        elif node_type == "output":
-            self.inputs = [("color", "vec4")]
-        elif node_type == "brightness":
-            self.inputs = [("color", "vec3"), ("value", "float")]
-            self.outputs = [("result", "vec3")]
-        elif node_type == "contrast":
-            self.inputs = [("color", "vec3"), ("value", "float")]
-            self.outputs = [("result", "vec3")]
-        elif node_type == "saturation":
-            self.inputs = [("color", "vec3"), ("value", "float")]
-            self.outputs = [("result", "vec3")]
-
-        self.height = max(80, 40 + max(len(self.inputs), len(self.outputs)) * 20)
-
-    def boundingRect(self):
-        return QtCore.QRectF(0, 0, self.width, self.height)
-
-    def paint(self, painter, option, widget):
-        # Node background
-        if self.isSelected():
-            painter.setBrush(QtGui.QBrush(QtGui.QColor(80, 80, 120)))
-        else:
-            painter.setBrush(QtGui.QBrush(QtGui.QColor(60, 60, 60)))
-        painter.setPen(QtGui.QPen(QtGui.QColor(100, 100, 100), 2))
-        painter.drawRoundedRect(0, 0, self.width, self.height, 5, 5)
-
-        # Title bar
-        painter.setBrush(QtGui.QBrush(QtGui.QColor(80, 100, 120)))
-        painter.drawRoundedRect(0, 0, self.width, 25, 5, 5)
-        painter.drawRect(0, 20, self.width, 5)
-
-        # Title text
-        painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255)))
-        painter.drawText(5, 17, self.name)
-
-        # Input ports
-        painter.setPen(QtGui.QPen(QtGui.QColor(200, 200, 200)))
-        for i, (name, _) in enumerate(self.inputs):
-            y = 35 + i * 20
-            painter.setBrush(QtGui.QBrush(QtGui.QColor(100, 200, 100)))
-            painter.drawEllipse(-5, y - 5, 10, 10)
-            painter.drawText(10, y + 4, name)
-
-        # Output ports
-        for i, (name, _) in enumerate(self.outputs):
-            y = 35 + i * 20
-            painter.setBrush(QtGui.QBrush(QtGui.QColor(200, 100, 100)))
-            painter.drawEllipse(self.width - 5, y - 5, 10, 10)
-            painter.drawText(self.width - 50, y + 4, name)
-
-
-class ShaderNodeGraphDialog(QtWidgets.QDialog):
-    """Visual node-based shader editor."""
+class HistogramWidget(QtWidgets.QWidget):
+    """Live RGB histogram display using QPainter."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Shader Node Graph")
-        self.resize(1000, 700)
-        self.nodes = []
-        self.connections = []
+        self.setFixedHeight(120)
+        self.setMinimumWidth(200)
+        self._hist_r = None
+        self._hist_g = None
+        self._hist_b = None
+        self._hist_lum = None
+        self._max_val = 1
 
-        layout = QtWidgets.QVBoxLayout(self)
+    def update_histogram(self, image_data):
+        """Compute histograms from RGBA uint8 numpy array (H, W, 4)."""
+        if image_data is None or image_data.size == 0:
+            self.clear()
+            return
+        r = image_data[:, :, 0].ravel()
+        g = image_data[:, :, 1].ravel()
+        b = image_data[:, :, 2].ravel()
+        self._hist_r = np.bincount(r, minlength=256).astype(np.float64)
+        self._hist_g = np.bincount(g, minlength=256).astype(np.float64)
+        self._hist_b = np.bincount(b, minlength=256).astype(np.float64)
+        lum = (0.299 * r + 0.587 * g + 0.114 * b).astype(np.uint8)
+        self._hist_lum = np.bincount(lum, minlength=256).astype(np.float64)
+        self._max_val = max(
+            self._hist_r.max(), self._hist_g.max(),
+            self._hist_b.max(), self._hist_lum.max(), 1
+        )
+        self.update()
 
-        # Toolbar
-        toolbar = QtWidgets.QHBoxLayout()
+    def clear(self):
+        self._hist_r = None
+        self._hist_g = None
+        self._hist_b = None
+        self._hist_lum = None
+        self._max_val = 1
+        self.update()
 
-        add_texture_btn = QtWidgets.QPushButton("+ Texture")
-        add_texture_btn.clicked.connect(lambda: self._add_node("texture", "Texture"))
-        toolbar.addWidget(add_texture_btn)
-
-        add_brightness_btn = QtWidgets.QPushButton("+ Brightness")
-        add_brightness_btn.clicked.connect(lambda: self._add_node("brightness", "Brightness"))
-        toolbar.addWidget(add_brightness_btn)
-
-        add_contrast_btn = QtWidgets.QPushButton("+ Contrast")
-        add_contrast_btn.clicked.connect(lambda: self._add_node("contrast", "Contrast"))
-        toolbar.addWidget(add_contrast_btn)
-
-        add_saturation_btn = QtWidgets.QPushButton("+ Saturation")
-        add_saturation_btn.clicked.connect(lambda: self._add_node("saturation", "Saturation"))
-        toolbar.addWidget(add_saturation_btn)
-
-        add_mix_btn = QtWidgets.QPushButton("+ Mix")
-        add_mix_btn.clicked.connect(lambda: self._add_node("mix", "Mix"))
-        toolbar.addWidget(add_mix_btn)
-
-        add_math_btn = QtWidgets.QPushButton("+ Math")
-        add_math_btn.clicked.connect(lambda: self._add_node("math", "Math"))
-        toolbar.addWidget(add_math_btn)
-
-        toolbar.addStretch()
-
-        generate_btn = QtWidgets.QPushButton("Generate Shader")
-        generate_btn.clicked.connect(self._generate_shader)
-        generate_btn.setStyleSheet("background-color: #2d5a2d;")
-        toolbar.addWidget(generate_btn)
-
-        layout.addLayout(toolbar)
-
-        # Graphics scene and view
-        self.scene = QtWidgets.QGraphicsScene()
-        self.scene.setSceneRect(-500, -500, 1000, 1000)
-        self.view = QtWidgets.QGraphicsView(self.scene)
-        self.view.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
-        self.view.setStyleSheet("background-color: #2a2a2a;")
-        layout.addWidget(self.view)
-
-        # Add default nodes
-        self._add_node("texture", "Input Texture", -200, 0)
-        self._add_node("output", "Output", 200, 0)
-
-        # Generated shader display
-        self.shader_output = QtWidgets.QPlainTextEdit()
-        self.shader_output.setMaximumHeight(150)
-        self.shader_output.setReadOnly(True)
-        self.shader_output.setFont(QtGui.QFont("Consolas", 9))
-        layout.addWidget(self.shader_output)
-
-        # Buttons
-        btn_row = QtWidgets.QHBoxLayout()
-        cancel_btn = QtWidgets.QPushButton("Cancel")
-        cancel_btn.clicked.connect(self.reject)
-        btn_row.addWidget(cancel_btn)
-        apply_btn = QtWidgets.QPushButton("Apply Shader")
-        apply_btn.clicked.connect(self.accept)
-        apply_btn.setStyleSheet("background-color: #2d5a2d;")
-        btn_row.addWidget(apply_btn)
-        layout.addLayout(btn_row)
-
-    def _add_node(self, node_type, name, x=None, y=None):
-        """Add a new node to the graph."""
-        if x is None:
-            x = random.randint(-200, 200)
-        if y is None:
-            y = random.randint(-200, 200)
-
-        node = ShaderNodeWidget(node_type, name, x, y)
-        self.scene.addItem(node)
-        self.nodes.append(node)
-
-    def _generate_shader(self):
-        """Generate GLSL code from the node graph."""
-        # Simple generation based on nodes present
-        code_lines = [
-            "#version 330 core",
-            "uniform sampler2D u_texture;",
-            "uniform float brightness;",
-            "uniform float contrast;",
-            "uniform float saturation;",
-            "in vec2 v_uv;",
-            "out vec4 f_color;",
-            "",
-            "void main() {",
-            "    vec4 color = texture(u_texture, v_uv);",
+    def paintEvent(self, event):
+        from PyQt6.QtGui import QPainter, QColor, QPen, QPainterPath
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w = self.width()
+        h = self.height()
+        # Background
+        p.fillRect(0, 0, w, h, QColor(26, 26, 26))
+        if self._hist_r is None:
+            p.setPen(QColor(100, 100, 100))
+            p.drawText(self.rect(), QtCore.Qt.AlignmentFlag.AlignCenter, "No image data")
+            p.end()
+            return
+        margin_bottom = 2
+        draw_h = h - margin_bottom
+        bin_w = w / 256.0
+        # Draw each channel as filled path
+        channels = [
+            (self._hist_r, QColor(220, 50, 50, 100)),
+            (self._hist_g, QColor(50, 200, 50, 100)),
+            (self._hist_b, QColor(50, 80, 220, 100)),
         ]
-
-        # Check which nodes are present and add their effects
-        for node in self.nodes:
-            if node.node_type == "brightness":
-                code_lines.append("    color.rgb += brightness;")
-            elif node.node_type == "contrast":
-                code_lines.append("    color.rgb = (color.rgb - 0.5) * contrast + 0.5;")
-            elif node.node_type == "saturation":
-                code_lines.append("    float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));")
-                code_lines.append("    color.rgb = mix(vec3(gray), color.rgb, saturation);")
-
-        code_lines.extend([
-            "    f_color = vec4(clamp(color.rgb, 0.0, 1.0), color.a);",
-            "}"
-        ])
-
-        shader_code = "\n".join(code_lines)
-        self.shader_output.setPlainText(shader_code)
-        return shader_code
-
-    def get_shader(self):
-        """Get the generated shader code."""
-        return self._generate_shader()
+        for hist, color in channels:
+            path = QPainterPath()
+            path.moveTo(0, h)
+            for i in range(256):
+                x = i * bin_w
+                bar_h = (hist[i] / self._max_val) * draw_h
+                path.lineTo(x, h - bar_h)
+            path.lineTo(w, h)
+            path.closeSubpath()
+            p.fillPath(path, color)
+        # Luminance outline
+        pen = QPen(QColor(200, 200, 200, 120))
+        pen.setWidthF(1.0)
+        p.setPen(pen)
+        lum_path = QPainterPath()
+        lum_path.moveTo(0, h)
+        for i in range(256):
+            x = i * bin_w
+            bar_h = (self._hist_lum[i] / self._max_val) * draw_h
+            lum_path.lineTo(x, h - bar_h)
+        lum_path.lineTo(w, h)
+        p.drawPath(lum_path)
+        # Border
+        p.setPen(QColor(60, 60, 60))
+        p.drawRect(0, 0, w - 1, h - 1)
+        p.end()
 
 
 class ShaderEditorDialog(QtWidgets.QDialog):
@@ -10274,6 +12486,14 @@ class ShaderStudio(QtWidgets.QMainWindow):
 
         toolbar.addStretch()
 
+        # Histogram toggle
+        self.hist_toggle_btn = QtWidgets.QPushButton("Histogram")
+        self.hist_toggle_btn.setCheckable(True)
+        self.hist_toggle_btn.setChecked(False)
+        self.hist_toggle_btn.setStyleSheet("font-size: 11px; padding: 3px 6px;")
+        self.hist_toggle_btn.clicked.connect(self._toggle_histogram)
+        toolbar.addWidget(self.hist_toggle_btn)
+
         # 2D mode button
         self.mode_2d_btn = QtWidgets.QPushButton("2D Mode")
         self.mode_2d_btn.clicked.connect(self._switch_to_2d)
@@ -10285,6 +12505,17 @@ class ShaderStudio(QtWidgets.QMainWindow):
         # Canvas
         self.canvas = ShaderCanvas()
         left.addWidget(self.canvas, 1)
+
+        # Histogram panel (hidden by default)
+        self.histogram_widget = HistogramWidget()
+        self.histogram_widget.hide()
+        left.addWidget(self.histogram_widget)
+
+        # Histogram debounce timer
+        self._hist_timer = QtCore.QTimer()
+        self._hist_timer.setSingleShot(True)
+        self._hist_timer.setInterval(100)
+        self._hist_timer.timeout.connect(self._do_update_histogram)
 
         # 3D Controls (hidden by default)
         self.controls_3d = QtWidgets.QWidget()
@@ -10313,6 +12544,21 @@ class ShaderStudio(QtWidgets.QMainWindow):
         self.zoom_slider.setFixedWidth(80)
         self.zoom_slider.valueChanged.connect(self._update_zoom)
         controls_layout.addWidget(self.zoom_slider)
+
+        # Render pass selector
+        controls_layout.addWidget(QtWidgets.QLabel("Pass:"))
+        self.render_pass_combo = QtWidgets.QComboBox()
+        self.render_pass_combo.addItems(["Combined", "Normals", "Depth", "Diffuse", "AO"])
+        self.render_pass_combo.setFixedWidth(100)
+        self.render_pass_combo.currentTextChanged.connect(self._on_render_pass_changed)
+        controls_layout.addWidget(self.render_pass_combo)
+
+        # Export all passes button
+        export_passes_btn = QtWidgets.QPushButton("Export Passes")
+        export_passes_btn.setStyleSheet("font-size: 11px; padding: 3px 6px;")
+        export_passes_btn.setToolTip("Export all render passes (Combined, Normals, Depth, Diffuse, AO) as separate PNG files")
+        export_passes_btn.clicked.connect(self._export_all_passes)
+        controls_layout.addWidget(export_passes_btn)
 
         controls_layout.addStretch()
         self.controls_3d.hide()
@@ -10370,16 +12616,6 @@ class ShaderStudio(QtWidgets.QMainWindow):
         line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
         line.setStyleSheet("background-color: #444;")
         insp_layout.addWidget(line)
-
-        # Category filter
-        cat_row = QtWidgets.QHBoxLayout()
-        cat_row.addWidget(QtWidgets.QLabel("Category:"))
-        self.category_combo = QtWidgets.QComboBox()
-        categories = ["All", "Custom Presets"] + sorted(set(s.get("category", "Other") for s in SHADERS.values()))
-        self.category_combo.addItems(categories)
-        self.category_combo.currentTextChanged.connect(self._filter_shaders)
-        cat_row.addWidget(self.category_combo)
-        insp_layout.addLayout(cat_row)
 
         # Shader selection
         shader_row = QtWidgets.QHBoxLayout()
@@ -10472,41 +12708,6 @@ class ShaderStudio(QtWidgets.QMainWindow):
         self.description.setStyleSheet("color: #888; font-style: italic; padding: 5px 0;")
         insp_layout.addWidget(self.description)
 
-        # Layer Opacity slider (controls the selected layer's opacity)
-        opacity_row = QtWidgets.QHBoxLayout()
-        opacity_label = QtWidgets.QLabel("Layer Opacity:")
-        opacity_label.setStyleSheet("color: #ccc; font-size: 11px;")
-        opacity_row.addWidget(opacity_label)
-
-        self.layer_opacity_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        self.layer_opacity_slider.setMinimum(0)
-        self.layer_opacity_slider.setMaximum(100)
-        self.layer_opacity_slider.setValue(100)
-        self.layer_opacity_slider.setToolTip("Opacity of the selected layer")
-        self.layer_opacity_slider.valueChanged.connect(self._on_layer_opacity_changed)
-        opacity_row.addWidget(self.layer_opacity_slider)
-
-        self.layer_opacity_value = QtWidgets.QLabel("100%")
-        self.layer_opacity_value.setFixedWidth(40)
-        self.layer_opacity_value.setStyleSheet("color: #aaa; font-size: 11px;")
-        opacity_row.addWidget(self.layer_opacity_value)
-
-        insp_layout.addLayout(opacity_row)
-
-        # Blend mode dropdown
-        blend_row = QtWidgets.QHBoxLayout()
-        blend_label = QtWidgets.QLabel("Blend Mode:")
-        blend_label.setStyleSheet("color: #ccc; font-size: 11px;")
-        blend_row.addWidget(blend_label)
-
-        self.blend_mode_combo = QtWidgets.QComboBox()
-        for mode_name in BLEND_MODE_NAMES:
-            self.blend_mode_combo.addItem(mode_name.replace('_', ' ').title())
-        self.blend_mode_combo.currentTextChanged.connect(self._on_blend_mode_changed)
-        blend_row.addWidget(self.blend_mode_combo)
-
-        insp_layout.addLayout(blend_row)
-
         # Parameters section
         params_label = QtWidgets.QLabel("Parameters")
         params_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #fff;")
@@ -10524,60 +12725,50 @@ class ShaderStudio(QtWidgets.QMainWindow):
         scroll.setWidget(self.params_widget)
         insp_layout.addWidget(scroll, 1)
 
-        # Separator before layers
-        line2 = QtWidgets.QFrame()
-        line2.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        line2.setStyleSheet("background-color: #444;")
-        insp_layout.addWidget(line2)
 
-        # Shader Layer Panel
-        self.layer_panel = ShaderLayerPanel()
-        self.layer_panel.layersChanged.connect(self._on_layers_changed)
-        self.layer_panel.layerSelected.connect(self._on_layer_selected)
-        insp_layout.addWidget(self.layer_panel)
 
-        # Separator after layers
-        line3 = QtWidgets.QFrame()
-        line3.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        line3.setStyleSheet("background-color: #444;")
-        insp_layout.addWidget(line3)
+        # Compact button style for inspector controls
+        compact_btn = "font-size: 11px; padding: 3px 6px;"
 
         # Preset management buttons
         preset_btns = QtWidgets.QHBoxLayout()
+        preset_btns.setSpacing(4)
 
         save_preset_btn = QtWidgets.QPushButton("Save Preset")
         save_preset_btn.clicked.connect(self._save_preset)
-        save_preset_btn.setStyleSheet("background-color: #5a5a2d;")
+        save_preset_btn.setStyleSheet(f"background-color: #5a5a2d; {compact_btn}")
         preset_btns.addWidget(save_preset_btn)
 
         delete_preset_btn = QtWidgets.QPushButton("Delete Preset")
         delete_preset_btn.clicked.connect(self._delete_preset)
-        delete_preset_btn.setStyleSheet("background-color: #5a2d2d;")
+        delete_preset_btn.setStyleSheet(f"background-color: #5a2d2d; {compact_btn}")
         preset_btns.addWidget(delete_preset_btn)
+
+        reset_btn = QtWidgets.QPushButton("Reset")
+        reset_btn.clicked.connect(self._reset_params)
+        reset_btn.setStyleSheet(compact_btn)
+        reset_btn.setToolTip("Reset to Defaults")
+        preset_btns.addWidget(reset_btn)
 
         insp_layout.addLayout(preset_btns)
 
-        # Reset button
-        reset_btn = QtWidgets.QPushButton("Reset to Defaults")
-        reset_btn.clicked.connect(self._reset_params)
-        insp_layout.addWidget(reset_btn)
-
         # Export buttons row
         export_row = QtWidgets.QHBoxLayout()
+        export_row.setSpacing(4)
 
         export_btn = QtWidgets.QPushButton("Export")
         export_btn.clicked.connect(self.export_image)
-        export_btn.setStyleSheet("background-color: #2d5a2d;")
+        export_btn.setStyleSheet(f"background-color: #2d5a2d; {compact_btn}")
         export_row.addWidget(export_btn)
 
         batch_btn = QtWidgets.QPushButton("Batch")
         batch_btn.clicked.connect(self.batch_process)
-        batch_btn.setStyleSheet("background-color: #2d5a5a;")
+        batch_btn.setStyleSheet(f"background-color: #2d5a5a; {compact_btn}")
         export_row.addWidget(batch_btn)
 
         upscale_btn = QtWidgets.QPushButton("Upscale")
         upscale_btn.clicked.connect(self.upscale_image)
-        upscale_btn.setStyleSheet("background-color: #5a2d5a;")
+        upscale_btn.setStyleSheet(f"background-color: #5a2d5a; {compact_btn}")
         export_row.addWidget(upscale_btn)
 
         insp_layout.addLayout(export_row)
@@ -10589,44 +12780,58 @@ class ShaderStudio(QtWidgets.QMainWindow):
         insp_layout.addWidget(bake_sep)
 
         bake_label = QtWidgets.QLabel("Shader Chain")
-        bake_label.setStyleSheet("font-size: 12px; font-weight: bold; color: #fff;")
+        bake_label.setStyleSheet("font-size: 11px; font-weight: bold; color: #fff;")
         insp_layout.addWidget(bake_label)
 
+        tiny_btn = "font-size: 11px; padding: 2px 4px;"
+
         bake_row = QtWidgets.QHBoxLayout()
+        bake_row.setSpacing(3)
 
-        bake_pass_btn = QtWidgets.QPushButton("Bake Pass")
-        bake_pass_btn.clicked.connect(self._bake_pass)
-        bake_pass_btn.setStyleSheet("background-color: #5a4a2d;")
-        bake_pass_btn.setToolTip("Commit the current shader effect and start a new pass on top")
-        bake_row.addWidget(bake_pass_btn)
+        self.bake_pass_btn = QtWidgets.QPushButton("Bake")
+        self.bake_pass_btn.clicked.connect(self._bake_or_update)
+        self.bake_pass_btn.setStyleSheet(f"background-color: #5a4a2d; {tiny_btn}")
+        self.bake_pass_btn.setToolTip("Bake Pass — Commit the current shader effect and start a new pass on top")
+        bake_row.addWidget(self.bake_pass_btn)
 
-        reset_chain_btn = QtWidgets.QPushButton("Reset Chain")
-        reset_chain_btn.clicked.connect(self._reset_chain)
-        reset_chain_btn.setStyleSheet("background-color: #5a2d2d;")
-        reset_chain_btn.setToolTip("Reload the original image and clear the shader chain")
-        bake_row.addWidget(reset_chain_btn)
+        self.reset_chain_btn = QtWidgets.QPushButton("Reset")
+        self.reset_chain_btn.clicked.connect(self._reset_chain)
+        self.reset_chain_btn.setStyleSheet(f"background-color: #5a2d2d; {tiny_btn}")
+        self.reset_chain_btn.setToolTip("Reset Chain — Reload the original image and clear the shader chain")
+        bake_row.addWidget(self.reset_chain_btn)
+
+        self.undo_btn = QtWidgets.QPushButton("Undo")
+        self.undo_btn.clicked.connect(self._undo)
+        self.undo_btn.setEnabled(False)
+        self.undo_btn.setStyleSheet(tiny_btn)
+        bake_row.addWidget(self.undo_btn)
+
+        self.redo_btn = QtWidgets.QPushButton("Redo")
+        self.redo_btn.clicked.connect(self._redo)
+        self.redo_btn.setEnabled(False)
+        self.redo_btn.setStyleSheet(tiny_btn)
+        bake_row.addWidget(self.redo_btn)
 
         insp_layout.addLayout(bake_row)
 
         self.chain_display_label = QtWidgets.QLabel("No chain")
         self.chain_display_label.setWordWrap(True)
-        self.chain_display_label.setStyleSheet("color: #aaa; font-size: 11px; padding: 2px;")
+        self.chain_display_label.setStyleSheet("color: #aaa; font-size: 10px; padding: 1px;")
         insp_layout.addWidget(self.chain_display_label)
 
-        # Undo/Redo buttons row
-        undo_row = QtWidgets.QHBoxLayout()
+        # Adjustment layer list for bake chain
+        self.chain_list_widget = QtWidgets.QListWidget()
+        self.chain_list_widget.setMaximumHeight(150)
+        self.chain_list_widget.setStyleSheet("""
+            QListWidget { background-color: #1e1e1e; border: 1px solid #444; font-size: 10px; }
+            QListWidget::item { padding: 2px; border-bottom: 1px solid #333; }
+            QListWidget::item:selected { background-color: #3a4a5a; }
+        """)
+        self.chain_list_widget.hide()
+        insp_layout.addWidget(self.chain_list_widget)
 
-        self.undo_btn = QtWidgets.QPushButton("Undo")
-        self.undo_btn.clicked.connect(self._undo)
-        self.undo_btn.setEnabled(False)
-        undo_row.addWidget(self.undo_btn)
-
-        self.redo_btn = QtWidgets.QPushButton("Redo")
-        self.redo_btn.clicked.connect(self._redo)
-        self.redo_btn.setEnabled(False)
-        undo_row.addWidget(self.redo_btn)
-
-        insp_layout.addLayout(undo_row)
+        # Edit mode state
+        self._editing_chain_index = None
 
         # Tools row (color picker, randomize, copy/paste)
         tools_row = QtWidgets.QHBoxLayout()
@@ -10911,9 +13116,8 @@ class ShaderStudio(QtWidgets.QMainWindow):
         # Skip during batch processing to avoid disrupting the batch loop
         if getattr(self, '_batch_processing', False):
             return
-        # Only call _on_image_loaded if base layer doesn't exist yet
-        if not self.layer_panel.base_layer:
-            self._on_image_loaded(path)
+        self._on_image_loaded(path)
+        self._update_histogram()
 
     def _on_image_loaded(self, path):
         """Called after an image is successfully loaded. Sets up layers and UI."""
@@ -10925,10 +13129,6 @@ class ShaderStudio(QtWidgets.QMainWindow):
         else:
             self.image_info.setText(f"{os.path.basename(path)} ({size[0]}x{size[1]})")
             self._hide_gif_controls()
-
-        # Create the base layer with the current shader
-        current_shader = self.shader_combo.currentText()
-        self.layer_panel.create_base_layer(current_shader)
 
     def _clear_recent(self):
         """Clear recent files list."""
@@ -11174,33 +13374,11 @@ class ShaderStudio(QtWidgets.QMainWindow):
                 # Add to SHADERS
                 SHADERS[shader_name] = self.custom_shaders[shader_name]
                 # Refresh UI
-                self._filter_shaders(self.category_combo.currentText())
+                self._filter_shaders("All")
 
     def _open_node_graph(self):
-        """Open the visual node graph shader editor."""
-        dialog = ShaderNodeGraphDialog(self)
-        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
-            shader_code = dialog.get_shader()
-            if shader_code:
-                # Add as custom shader
-                shader_name = f"Node Graph {len(self.custom_shaders) + 1}"
-                self.custom_shaders[shader_name] = {
-                    "category": "Custom",
-                    "description": "Generated from node graph",
-                    "uniforms": {
-                        "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
-                        "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
-                        "saturation": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
-                    },
-                    "frag": shader_code
-                }
-                SHADERS[shader_name] = self.custom_shaders[shader_name]
-                self._filter_shaders(self.category_combo.currentText())
-
-                # Switch to the new shader
-                idx = self.shader_combo.findText(shader_name)
-                if idx >= 0:
-                    self.shader_combo.setCurrentIndex(idx)
+        """Open the visual node graph shader editor (not yet implemented)."""
+        QtWidgets.QMessageBox.information(self, "Node Graph", "Node graph editor is not available.")
 
     # --- VIDEO PROCESSING ---
     def process_video(self):
@@ -11476,16 +13654,13 @@ class ShaderStudio(QtWidgets.QMainWindow):
         self.canvas.set_preset(name)
         self._update_params_ui(name)
 
-        # Update the selected layer's shader if there is one
-        if self.layer_panel.get_selected_layer():
-            self.layer_panel.update_selected_layer_shader(name)
-
         # Restore cached params if available
         if name in self.current_params_cache:
             for param_name, value in self.current_params_cache[name].items():
                 self.canvas.set_param(param_name, value)
                 if param_name in self.param_widgets:
                     self.param_widgets[param_name].set_value(value)
+        self._update_histogram()
 
     def _on_ai_model_changed(self, model_name):
         """Update when AI model selection changes."""
@@ -11500,62 +13675,6 @@ class ShaderStudio(QtWidgets.QMainWindow):
         if model_name in AI_MODELS:
             model = AI_MODELS[model_name]
             self.ai_response_label.setText(model.get("description", ""))
-
-    def _on_layers_changed(self, layers_data):
-        """Handle changes to the shader layer stack."""
-        # Store the layer data and trigger a repaint
-        self.canvas.shader_layers = layers_data if layers_data else []
-        self.canvas.update()
-
-    def _on_layer_selected(self, layer_data):
-        """Handle layer selection - update the shader inspector to show this layer's settings."""
-        if not layer_data:
-            return
-
-        shader_name = layer_data.get('shader', 'Original')
-        params = layer_data.get('params', {})
-        opacity = layer_data.get('opacity', 1.0)
-        blend_mode = layer_data.get('blend_mode', 'normal')
-
-        # Update the shader dropdown without triggering canvas update
-        self.shader_combo.blockSignals(True)
-        self.shader_combo.setCurrentText(shader_name)
-        self.shader_combo.blockSignals(False)
-
-        # Update the opacity slider without triggering change
-        self.layer_opacity_slider.blockSignals(True)
-        self.layer_opacity_slider.setValue(int(opacity * 100))
-        self.layer_opacity_value.setText(f"{int(opacity * 100)}%")
-        self.layer_opacity_slider.blockSignals(False)
-
-        # Update the blend mode dropdown without triggering change
-        self.blend_mode_combo.blockSignals(True)
-        display_mode = blend_mode.replace('_', ' ').title()
-        self.blend_mode_combo.setCurrentText(display_mode)
-        self.blend_mode_combo.blockSignals(False)
-
-        # Update the params UI for this shader
-        self._update_params_ui(shader_name)
-
-        # Set the parameter values from the layer
-        for param_name, value in params.items():
-            if param_name in self.param_widgets:
-                self.param_widgets[param_name].set_value(value)
-
-    def _on_layer_opacity_changed(self, value):
-        """Handle opacity slider change - update selected layer."""
-        opacity = value / 100.0
-        self.layer_opacity_value.setText(f"{value}%")
-        selected = self.layer_panel.get_selected_layer()
-        if selected:
-            selected.set_opacity(opacity)
-
-    def _on_blend_mode_changed(self, text):
-        """Handle blend mode dropdown change - update selected layer."""
-        mode = text.lower().replace(' ', '_')
-        selected = self.layer_panel.get_selected_layer()
-        if selected:
-            selected.set_blend_mode(mode)
 
     def _generate_ai_effect(self):
         """Generate and apply shader effect based on user prompt."""
@@ -11881,10 +14000,7 @@ Only respond with valid JSON, no other text. Example:
             self._push_undo_state(name, old_value, value)
 
         self.canvas.set_param(name, value)
-
-        # Also update the selected layer's params
-        if self.layer_panel.get_selected_layer():
-            self.layer_panel.update_selected_layer_param(name, value)
+        self._update_histogram()
 
     def _push_undo_state(self, name, old_value, new_value):
         """Push a parameter change to the undo stack."""
@@ -11986,6 +14102,8 @@ Only respond with valid JSON, no other text. Example:
         if idx >= 0:
             self.shader_combo.setCurrentIndex(idx)
         self._update_params_ui("Original")
+        self._refresh_chain_list()
+        self._update_histogram()
 
     def _reset_chain(self):
         """Reset to the original image and clear the bake chain."""
@@ -11993,11 +14111,182 @@ Only respond with valid JSON, no other text. Example:
             return
         self.canvas.reset_chain()
         self.chain_display_label.setText("No chain")
+        self._refresh_chain_list()
         # Reset shader combo to Original
         idx = self.shader_combo.findText("Original")
         if idx >= 0:
             self.shader_combo.setCurrentIndex(idx)
         self._update_params_ui("Original")
+        self._update_histogram()
+
+    # --- Adjustment Layers ---
+
+    def _bake_or_update(self):
+        """Handle bake button — either bake a new pass or update an existing layer."""
+        if self._editing_chain_index is not None:
+            self._update_chain_layer()
+        else:
+            self._bake_pass()
+
+    def _refresh_chain_list(self):
+        """Rebuild the chain list widget from the current bake chain."""
+        self.chain_list_widget.clear()
+        chain = self.canvas._bake_chain
+        if not chain:
+            self.chain_list_widget.hide()
+            self.chain_display_label.setText("No chain")
+            return
+        self.chain_list_widget.show()
+        chain_names = [e['shader'] for e in chain if e.get('enabled', True)]
+        self.chain_display_label.setText(" \u2192 ".join(chain_names) if chain_names else "All disabled")
+        for i, entry in enumerate(chain):
+            item_widget = QtWidgets.QWidget()
+            row = QtWidgets.QHBoxLayout(item_widget)
+            row.setContentsMargins(2, 1, 2, 1)
+            row.setSpacing(3)
+            cb = QtWidgets.QCheckBox()
+            cb.setChecked(entry.get('enabled', True))
+            cb.stateChanged.connect(lambda state, idx=i: self._on_chain_layer_toggled(idx, state != 0))
+            row.addWidget(cb)
+            # Shader name + param summary
+            shader_name = entry['shader']
+            defaults = {k: v.get("default", 0.0)
+                        for k, v in SHADERS.get(shader_name, {}).get("uniforms", {}).items()}
+            param_parts = []
+            for k, v in entry['params'].items():
+                if abs(v - defaults.get(k, 0.0)) > 0.001:
+                    param_parts.append(f"{k}={v:.2f}")
+            suffix = f"  ({', '.join(param_parts)})" if param_parts else ""
+            label = QtWidgets.QLabel(f"{shader_name}{suffix}")
+            label.setStyleSheet("color: #ccc; font-size: 10px;")
+            if not entry.get('enabled', True):
+                label.setStyleSheet("color: #666; font-size: 10px;")
+            row.addWidget(label, 1)
+            edit_btn = QtWidgets.QPushButton("Edit")
+            edit_btn.setFixedWidth(32)
+            edit_btn.setStyleSheet("font-size: 9px; padding: 1px 3px;")
+            edit_btn.clicked.connect(lambda _, idx=i: self._on_chain_layer_edit(idx))
+            row.addWidget(edit_btn)
+            del_btn = QtWidgets.QPushButton("X")
+            del_btn.setFixedWidth(20)
+            del_btn.setStyleSheet("font-size: 9px; padding: 1px 3px; background-color: #5a2d2d;")
+            del_btn.clicked.connect(lambda _, idx=i: self._on_chain_layer_remove(idx))
+            row.addWidget(del_btn)
+            list_item = QtWidgets.QListWidgetItem()
+            list_item.setSizeHint(item_widget.sizeHint())
+            self.chain_list_widget.addItem(list_item)
+            self.chain_list_widget.setItemWidget(list_item, item_widget)
+
+    def _on_chain_layer_toggled(self, index, enabled):
+        """Toggle a chain layer on/off and re-render."""
+        if index < len(self.canvas._bake_chain):
+            self.canvas._bake_chain[index]['enabled'] = enabled
+            self.canvas._replay_chain()
+            self._refresh_chain_list()
+            self._update_histogram()
+
+    def _on_chain_layer_edit(self, index):
+        """Enter edit mode for a chain layer."""
+        if index >= len(self.canvas._bake_chain):
+            return
+        entry = self.canvas._bake_chain[index]
+        self._editing_chain_index = index
+        # Switch shader combo and params to match the layer
+        shader_name = entry['shader']
+        idx = self.shader_combo.findText(shader_name)
+        if idx >= 0:
+            self.shader_combo.blockSignals(True)
+            self.shader_combo.setCurrentIndex(idx)
+            self.shader_combo.blockSignals(False)
+        self.canvas.current_preset = shader_name
+        self.canvas._compile_shader()
+        self._update_params_ui(shader_name)
+        # Restore the layer's params
+        for param_name, value in entry['params'].items():
+            self.canvas.set_param(param_name, value)
+            if param_name in self.param_widgets:
+                self.param_widgets[param_name].set_value(value)
+        # Update button states
+        self.bake_pass_btn.setText("Update")
+        self.bake_pass_btn.setStyleSheet("background-color: #2d5a5a; font-size: 11px; padding: 2px 4px;")
+        self.bake_pass_btn.setToolTip(f"Update Layer {index + 1} — Save parameter changes")
+        self.reset_chain_btn.setEnabled(False)
+
+    def _update_chain_layer(self):
+        """Save current params back to the editing chain entry and re-render."""
+        idx = self._editing_chain_index
+        if idx is None or idx >= len(self.canvas._bake_chain):
+            return
+        self.canvas._bake_chain[idx]['params'] = dict(self.canvas.params)
+        self.canvas._bake_chain[idx]['shader'] = self.canvas.current_preset
+        self._exit_edit_mode()
+        self.canvas._replay_chain()
+        self._refresh_chain_list()
+        self._update_histogram()
+
+    def _exit_edit_mode(self):
+        """Exit adjustment layer edit mode and restore UI."""
+        self._editing_chain_index = None
+        self.bake_pass_btn.setText("Bake")
+        self.bake_pass_btn.setStyleSheet("background-color: #5a4a2d; font-size: 11px; padding: 2px 4px;")
+        self.bake_pass_btn.setToolTip("Bake Pass — Commit the current shader effect and start a new pass on top")
+        self.reset_chain_btn.setEnabled(True)
+        # Reset to Original
+        idx = self.shader_combo.findText("Original")
+        if idx >= 0:
+            self.shader_combo.setCurrentIndex(idx)
+        self._update_params_ui("Original")
+
+    def _on_chain_layer_remove(self, index):
+        """Remove a layer from the chain and re-render."""
+        if index >= len(self.canvas._bake_chain):
+            return
+        # If editing this layer, exit edit mode
+        if self._editing_chain_index == index:
+            self._exit_edit_mode()
+        elif self._editing_chain_index is not None and self._editing_chain_index > index:
+            self._editing_chain_index -= 1
+        self.canvas._bake_chain.pop(index)
+        if self.canvas._bake_chain:
+            self.canvas._replay_chain()
+        else:
+            # No layers left, reset to original
+            self.canvas.reset_chain()
+        self._refresh_chain_list()
+        self._update_histogram()
+
+    # --- Histogram ---
+
+    def _toggle_histogram(self, checked):
+        """Show or hide the histogram panel."""
+        self.histogram_widget.setVisible(checked)
+        if checked:
+            self._update_histogram()
+
+    def _update_histogram(self):
+        """Schedule a debounced histogram update."""
+        if not self.histogram_widget.isVisible():
+            return
+        self._hist_timer.start()
+
+    def _do_update_histogram(self):
+        """Actually compute and display the histogram."""
+        if not self.histogram_widget.isVisible():
+            return
+        if self.canvas.texture_id is None:
+            self.histogram_widget.clear()
+            return
+        # Render at reduced resolution for performance
+        w, h = self.canvas.image_size
+        scale = min(1.0, 512.0 / max(w, h))
+        rw, rh = max(1, int(w * scale)), max(1, int(h * scale))
+        self.canvas.makeCurrent()
+        if self.canvas.mode_3d:
+            data = self.canvas._export_3d(rw, rh)
+        else:
+            data = self.canvas._export_2d_single(self.canvas.program, self.canvas.params, rw, rh)
+        if data is not None:
+            self.histogram_widget.update_histogram(data)
 
     # --- Preset Management ---
 
@@ -12040,9 +14329,6 @@ Only respond with valid JSON, no other text. Example:
                 "base_shader": current_shader,
                 "params": current_params
             }
-            layer_stack = self.layer_panel.get_layer_stack_data()
-            if layer_stack:
-                preset_data["layer_stack"] = layer_stack
             USER_PRESETS[name] = preset_data
             save_user_presets()
             self._refresh_preset_combo()
@@ -12107,11 +14393,6 @@ Only respond with valid JSON, no other text. Example:
             if name in self.param_widgets:
                 self.param_widgets[name].set_value(value)
 
-        # Restore layer stack if present
-        layer_stack = preset.get("layer_stack")
-        if layer_stack:
-            self.layer_panel.restore_layer_stack(layer_stack)
-
         self.description.setText(f"Custom preset based on {base_shader}")
 
     # --- 3D Mode Methods ---
@@ -12161,6 +14442,44 @@ Only respond with valid JSON, no other text. Example:
         """Update zoom level."""
         self.canvas.zoom = value / 10.0
         self.canvas.update()
+
+    # --- Render Passes ---
+
+    def _on_render_pass_changed(self, pass_name):
+        """Switch the 3D viewport to show a different render pass."""
+        mode_map = {
+            "Combined": "combined",
+            "Normals": "normals",
+            "Depth": "depth",
+            "Diffuse": "diffuse",
+            "AO": "ao",
+        }
+        self.canvas.render_pass_mode = mode_map.get(pass_name, "combined")
+        self.canvas.update()
+        self._update_histogram()
+
+    def _export_all_passes(self):
+        """Export all AOV render passes as separate PNG files."""
+        if not self.canvas.mode_3d:
+            QtWidgets.QMessageBox.information(self, "Export Passes", "Load a 3D model first.")
+            return
+        folder = QtWidgets.QFileDialog.getExistingDirectory(self, "Select Output Folder")
+        if not folder:
+            return
+        self.canvas.makeCurrent()
+        w, h = self.canvas.image_size if self.canvas.image_size != (256, 256) else (1024, 1024)
+        passes = self.canvas._export_all_passes(w, h)
+        saved = []
+        for pass_name, data in passes.items():
+            if data is not None:
+                img = Image.fromarray(data)
+                out_path = os.path.join(folder, f"render_{pass_name}.png")
+                img.save(out_path)
+                saved.append(pass_name)
+        QtWidgets.QMessageBox.information(
+            self, "Export Passes",
+            f"Exported {len(saved)} passes to:\n{folder}\n\n" + ", ".join(saved)
+        )
 
     # --- GIF Controls ---
     def _show_gif_controls(self):
@@ -12605,13 +14924,11 @@ Only respond with valid JSON, no other text. Example:
                             )
                             QtWidgets.QApplication.processEvents()
 
-                            # Compile shader if needed
+                            # Set canvas to this shader and compile
                             shader_name = chain_entry['shader']
-                            program = self.canvas.layer_programs.get(shader_name)
-                            if program is None:
-                                program = self.canvas._compile_layer_shader(shader_name)
-                            if program is None:
-                                program = self.canvas.program
+                            self.canvas.current_preset = shader_name
+                            self.canvas._compile_shader()
+                            program = self.canvas.program
                             if program is None:
                                 print(f"[BATCH] No program for shader: {shader_name}")
                                 break
@@ -12656,8 +14973,7 @@ Only respond with valid JSON, no other text. Example:
                         self.canvas.update()
                         QtWidgets.QApplication.processEvents()
 
-                        layers = self.layer_panel.get_all_layers()
-                        image_data = self.canvas.export_to_image(layers=layers if layers else None)
+                        image_data = self.canvas.export_to_image()
                         if image_data is None:
                             print(f"[BATCH] export_to_image returned None for: {file_path}")
                             failed += 1

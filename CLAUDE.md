@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Single-file PyQt6 + PyOpenGL desktop application for applying real-time GLSL shader effects to images and 3D models. The main file `shader_studio_v3.py` is ~550KB / 12,000+ lines containing all application code, shader definitions, and UI.
+Single-file PyQt6 + PyOpenGL desktop application for applying real-time GLSL shader effects to images and 3D models. The main file `shader_studio_v3.py` is ~11,000+ lines containing all application code, shader definitions, and UI.
 
 ## How to Run
 
@@ -14,6 +14,24 @@ To capture crash output:
 ```bash
 python shader_studio_v3.py 2>&1 | tee crash_log.txt
 ```
+
+## Version Control
+
+Git repo initialized. `.gitignore` excludes `__pycache__`, `build/`, `dist/`, logs, PNGs, `.bak` files, and 3D model binaries.
+
+## Claude Code Setup
+
+### Hooks (`.claude/settings.local.json`)
+- **PreToolUse**: Blocks Edit/Write to `.bak`, `shader_studio_v2.py`, `shader_studio.py` (protected files)
+- **PostToolUse**: Runs `py_compile` syntax check on every `.py` file edit
+
+### Skills
+- `/run-shader-studio` — Kill existing instance, launch app with crash logging
+- `/add-shader` — Add new GLSL shader effect following project conventions
+
+### Environment
+- Windows with Git Bash: use `/c/Users/...` paths in Bash, `C:\Users\...` in Read/Edit/Write tools
+- `_update_params_ui(shader_name)` requires the shader name argument
 
 ## Dependencies
 
@@ -49,12 +67,10 @@ pyinstaller --clean shade_studio.spec
 | Class | Line | Purpose |
 |-------|------|---------|
 | `SimpleUpscaler` | ~154 | AI/Lanczos image upscaling |
-| `ShaderCanvas` | ~7244 | Main OpenGL rendering widget (QOpenGLWidget) |
-| `ParameterSlider` | ~9290 | Custom slider widget for shader params |
-| `ShaderLayerWidget` | ~9343 | Individual layer UI widget |
-| `ShaderLayerPanel` | ~9530 | Layer management panel |
-| `ShaderEditorDialog` | ~10004 | GLSL code editor dialog |
-| `ShaderStudio` | ~10178 | Main application window (QMainWindow) |
+| `ShaderCanvas` | ~7168 | Main OpenGL rendering widget (QOpenGLWidget) |
+| `ParameterSlider` | ~8547 | Custom slider widget for shader params |
+| `ShaderEditorDialog` | ~8600 | GLSL code editor dialog |
+| `ShaderStudio` | ~8740 | Main application window (QMainWindow) |
 
 ### Shader System
 
@@ -108,26 +124,14 @@ All shaders use OpenGL 3.3 core profile (`#version 330 core`).
 | `_upload_texture(data)` | Upload numpy array as GL texture |
 | `_export_2d_single(program, params, w, h)` | Render shader to FBO, return numpy array |
 | `_compile_shader()` | Compile current shader program with VAO setup |
-| `_compile_layer_shader(name)` | Compile a named shader (caches result) |
 | `bake_current_pass()` | Commit current shader as new source texture |
 | `reset_chain()` | Reload original image, clear bake chain |
 | `paintGL()` | Main render entry point |
+| `batch_process()` | Batch dialog with shader chain UI |
+| `_batch_export_individual()` | Multi-pass batch export (accepts `shader_chain`) |
+| `_batch_chain_refresh_list()` | Refresh chain list widget (call after modifying `_batch_shader_chain`) |
 
 ## Critical Bugs & Gotchas
-
-### NVIDIA Passthrough Shader Bug (UNRESOLVED)
-
-**Bug**: The passthrough shader (`fragColor = texture(u_texture, v_uv)`) produces `[0,0,0,0]` (black) when sampling ANY texture, even the original uploaded texture. This happens despite:
-- Correct attribute locations (0 and 1)
-- Enabled VAO attributes
-- No GL errors
-- Valid texture binding
-
-**Driver**: NVIDIA 581.57
-
-**Impact**: The layer compositing system's real-time viewport rendering is broken. Layer code exists in the file but is non-functional for viewport display. All "real" shaders (Original, Pixelation, etc.) work fine - only the standalone passthrough program fails.
-
-**Workaround**: All off-screen rendering uses `_export_2d_single()` which creates its own FBO and reads back via `glReadPixels` - this works correctly.
 
 ### np.flipud Non-Contiguous Arrays
 
@@ -136,20 +140,6 @@ All shaders use OpenGL 3.3 core profile (`#version 330 core`).
 **Fix**: Always wrap with `np.ascontiguousarray()`:
 ```python
 self._upload_texture(np.ascontiguousarray(np.flipud(image_data)))
-```
-
-### VAO Vertex Attributes for Layer Shaders
-
-`_compile_layer_shader()` does NOT set up vertex attribute pointers (unlike `_compile_shader()`). When rendering with a layer-compiled shader, you must explicitly set up VAO attributes:
-
-```python
-GL.glBindVertexArray(self.canvas.vao)
-GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.canvas.vbo)
-stride = 4 * 4  # 4 floats * 4 bytes
-GL.glVertexAttribPointer(0, 2, GL.GL_FLOAT, False, stride, ctypes.c_void_p(0))
-GL.glEnableVertexAttribArray(0)
-GL.glVertexAttribPointer(1, 2, GL.GL_FLOAT, False, stride, ctypes.c_void_p(8))
-GL.glEnableVertexAttribArray(1)
 ```
 
 ### Silent Crashes
@@ -175,17 +165,18 @@ Basic, Stylized, Edge Detection, Color, Post-Processing, Blur, Distortion, Light
 
 ### UI Patterns
 
-- Inspector panel on the right side with shader combo, parameters (auto-generated sliders), layer panel, preset management, export/batch/upscale buttons, bake pass controls
+- Inspector panel on the right side with shader combo, parameters (auto-generated sliders), preset management, export/batch/upscale buttons, bake pass controls
 - Parameters auto-generate `ParameterSlider` widgets from the shader's `uniforms` dict
 - Dark theme throughout (background ~#2a2a2a, text ~#ddd)
+- Button styling tiers: `compact_btn` (11px font, 3px 6px padding) for primary buttons (Export, Batch, Upscale), `tiny_btn` (11px font, 2px 4px padding) for secondary buttons (Bake, Reset, Undo, Redo)
+- No category filter dropdown — `_filter_shaders("All")` is called directly when refreshing the shader list
 
 ## State Variables (ShaderCanvas.__init__)
 
 Key state groups:
 - **Core**: `program`, `texture_id`, `image_size`, `image_path`, `params`, `current_preset`
-- **Layers**: `shader_layers`, `layer_programs`, `layer_cache` (FBO per layer)
 - **Bake Chain**: `_bake_chain`, `_original_image_data`, `_original_image_path`
-- **FBO**: `fbo`, `fbo_texture`, `accum_fbo_a/b` (ping-pong for compositing)
+- **FBO**: `fbo`, `fbo_texture` (for post-processing)
 - **3D Mode**: `mode_3d`, vertices/normals/UVs, multiple light sources, camera
 - **Animation**: `gif_frames`, `gif_timer`, `gif_playing`
 - **Undo/Redo**: history stack for parameter changes

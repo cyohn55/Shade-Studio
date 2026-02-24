@@ -3,7 +3,7 @@
 block_cipher = None
 
 a = Analysis(
-    ['shader_studio_v2.py'],
+    ['shader_studio_v3.py'],
     pathex=[],
     binaries=[],
     datas=[],
@@ -21,11 +21,18 @@ a = Analysis(
         'numpy',
         'PIL',
         'PIL.Image',
+        'PIL.ImageFilter',
         'json',
         'os',
         'sys',
         'math',
         'ctypes',
+        'struct',
+        'random',
+        'tempfile',
+        'subprocess',
+        'copy',
+        'pathlib',
     ],
     hookspath=[],
     hooksconfig={},

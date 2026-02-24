@@ -19,7 +19,36 @@
       "Bash(start python shader_studio_v2.py:*)",
       "Bash(dir:*)",
       "Bash(git init:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Skill(claude-md-management:revise-claude-md)",
+      "Skill(claude-md-management:revise-claude-md:*)",
+      "Bash(python -m py_compile:*)",
+      "Bash(git status:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "intercept",
+            "command": "python -c \"import sys,json; event=json.load(sys.stdin); path=event.get('input',{}).get('file_path',''); bad=['.bak','shader_studio_v2.py','shader_studio.py']; match=[b for b in bad if path.endswith(b)]; print(f'BLOCKED: {match[0]} is a protected file. Only edit shader_studio_v3.py') if match else None; sys.exit(1 if match else 0)\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -c \"import sys,json; event=json.load(sys.stdin); path=event.get('input',{}).get('file_path',''); exec('import py_compile; py_compile.compile(path, doraise=True)') if path.endswith('.py') else None\""
+          }
+        ]
+      }
     ]
   }
 }
