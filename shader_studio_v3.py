@@ -5,6 +5,14 @@ Features: 2D/3D rendering, custom presets, AI upscaling, video processing,
 """
 
 import sys
+import os
+
+# When bundled as a windowed exe (console=False), sys.stderr/stdout can be None
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, 'w')
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, 'w')
+
 import faulthandler
 faulthandler.enable()
 import numpy as np
@@ -10937,6 +10945,32 @@ void main() {
 }
 """
 
+# UV-space bake vertex shader — maps UV coords to screen for texture baking
+VERTEX_SHADER_UV_BAKE = """
+#version 330 core
+in vec3 in_vert;
+in vec2 in_uv;
+in vec3 in_normal;
+
+uniform mat4 u_model;
+
+out vec2 v_uv;
+out vec3 v_normal;
+out vec3 v_position;
+
+void main() {
+    // Position in UV space: map [0,1] -> [-1,1] NDC
+    // Flip V so that glTF's UV Y=0 (top) maps to NDC Y=+1 (top of FBO)
+    vec2 ndc_uv = vec2(in_uv.x * 2.0 - 1.0, (1.0 - in_uv.y) * 2.0 - 1.0);
+    gl_Position = vec4(ndc_uv, 0.0, 1.0);
+    v_uv = in_uv;
+    // Still compute world-space position and normal for lighting
+    vec4 world_pos = u_model * vec4(in_vert, 1.0);
+    v_position = world_pos.xyz;
+    v_normal = mat3(transpose(inverse(u_model))) * in_normal;
+}
+"""
+
 # 3D Fragment shader that samples texture like 2D but with lighting
 FRAG_SHADER_3D_WRAPPER = """
 #version 330 core
@@ -14309,6 +14343,7 @@ void main() {{
         self.pan_x = 0.0
         self.pan_y = 0.0
         self._model_extent = max_extent
+        self._model_center = center  # Save for export (un-centering)
         print(f"Model bounds: extent={extent}, center={center}, auto-zoom={self.zoom:.2f}")
 
         interleaved = []
@@ -14498,6 +14533,540 @@ void main() {{
             return result if result is not None else scene_data
 
         return scene_data
+
+    # --- Bake & Export 3D Model ---
+
+    def _bake_uv_texture(self, bake_size=2048, include_paint=True):
+        """Render the 3D PBR scene into UV space, producing a baked texture.
+
+        Returns a numpy RGBA uint8 array of shape (bake_size, bake_size, 4).
+        """
+        self.makeCurrent()
+
+        # Build the same PBR fragment shader as _compile_shader_3d but paired
+        # with the UV-bake vertex shader
+        num_lights = len(self.lights)
+        light_uniforms = "\n".join(
+            f"uniform vec3 u_light{i+1}_pos;\n"
+            f"uniform vec3 u_light{i+1}_color;\n"
+            f"uniform float u_light{i+1}_intensity;"
+            for i in range(num_lights)
+        )
+        light_calls = "\n    ".join(
+            f"lighting += calculateLight(u_light{i+1}_pos, u_light{i+1}_color, "
+            f"u_light{i+1}_intensity, normal, v_position, viewDir, u_roughness, u_metallic) * color;"
+            for i in range(num_lights)
+        )
+
+        frag_src = f"""
+#version 330 core
+uniform sampler2D u_texture;
+uniform mat4 u_model;
+
+// Light uniforms ({num_lights} lights)
+{light_uniforms}
+uniform float u_ambient_intensity;
+uniform float u_specular_power;
+uniform float u_specular_intensity;
+uniform vec3 u_camera_pos;
+
+// PBR material uniforms
+uniform vec4 u_base_color;
+uniform float u_metallic;
+uniform float u_roughness;
+uniform vec3 u_emissive;
+uniform float u_model_extent;
+
+in vec2 v_uv;
+in vec3 v_normal;
+in vec3 v_position;
+
+out vec4 f_color;
+
+vec3 calculateLight(vec3 lightPos, vec3 lightColor, float intensity, vec3 normal, vec3 fragPos, vec3 viewDir, float roughness, float metallic) {{
+    if(intensity <= 0.0) return vec3(0.0);
+    vec3 lightDir = normalize(lightPos - fragPos);
+    float diff = max(dot(normal, lightDir), 0.0);
+    vec3 diffuse = diff * lightColor * intensity * (1.0 - metallic);
+    vec3 halfwayDir = normalize(lightDir + viewDir);
+    float adjusted_power = max(u_specular_power * (1.0 - roughness * 0.9), 2.0);
+    float spec = pow(max(dot(normal, halfwayDir), 0.0), adjusted_power);
+    float spec_strength = u_specular_intensity * (1.0 - roughness * 0.7) * (0.5 + metallic * 0.5);
+    vec3 specular = spec * lightColor * spec_strength * intensity;
+    float distance = length(lightPos - fragPos);
+    float nd = distance / max(u_model_extent, 0.1);
+    float attenuation = 1.0 / (1.0 + 0.3 * nd + 0.1 * nd * nd);
+    return (diffuse + specular) * attenuation;
+}}
+
+void main() {{
+    vec4 tex_color = texture(u_texture, v_uv);
+    vec4 mat_color = tex_color * u_base_color;
+    vec3 color = mat_color.rgb;
+    vec3 normal = normalize(v_normal);
+    vec3 viewDir = normalize(u_camera_pos - v_position);
+    vec3 ambient = color * u_ambient_intensity;
+    vec3 lighting = ambient;
+    {light_calls}
+    lighting += u_emissive;
+    f_color = vec4(clamp(lighting, 0.0, 1.0), mat_color.a);
+}}
+"""
+        # Compile UV bake shader program
+        vert_shader = GL.glCreateShader(GL.GL_VERTEX_SHADER)
+        GL.glShaderSource(vert_shader, VERTEX_SHADER_UV_BAKE)
+        GL.glCompileShader(vert_shader)
+        if not GL.glGetShaderiv(vert_shader, GL.GL_COMPILE_STATUS):
+            error = GL.glGetShaderInfoLog(vert_shader).decode()
+            print(f"[BAKE] Vertex shader error: {error}")
+            return None
+
+        frag_shader = GL.glCreateShader(GL.GL_FRAGMENT_SHADER)
+        GL.glShaderSource(frag_shader, frag_src)
+        GL.glCompileShader(frag_shader)
+        if not GL.glGetShaderiv(frag_shader, GL.GL_COMPILE_STATUS):
+            error = GL.glGetShaderInfoLog(frag_shader).decode()
+            print(f"[BAKE] Fragment shader error: {error}")
+            return None
+
+        bake_program = GL.glCreateProgram()
+        GL.glAttachShader(bake_program, vert_shader)
+        GL.glAttachShader(bake_program, frag_shader)
+        GL.glLinkProgram(bake_program)
+        if not GL.glGetProgramiv(bake_program, GL.GL_LINK_STATUS):
+            error = GL.glGetProgramInfoLog(bake_program).decode()
+            print(f"[BAKE] Program link error: {error}")
+            return None
+        GL.glDeleteShader(vert_shader)
+        GL.glDeleteShader(frag_shader)
+
+        # Create FBO for baking
+        fbo = GL.glGenFramebuffers(1)
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, fbo)
+        bake_tex = GL.glGenTextures(1)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, bake_tex)
+        GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA8, bake_size, bake_size, 0,
+                        GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, None)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
+        GL.glFramebufferTexture2D(GL.GL_FRAMEBUFFER, GL.GL_COLOR_ATTACHMENT0,
+                                  GL.GL_TEXTURE_2D, bake_tex, 0)
+
+        if GL.glCheckFramebufferStatus(GL.GL_FRAMEBUFFER) != GL.GL_FRAMEBUFFER_COMPLETE:
+            print("[BAKE] FBO incomplete")
+            GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
+            GL.glDeleteFramebuffers(1, [fbo])
+            GL.glDeleteTextures([bake_tex])
+            GL.glDeleteProgram(bake_program)
+            return None
+
+        GL.glViewport(0, 0, bake_size, bake_size)
+        GL.glClearColor(0, 0, 0, 0)  # Transparent black
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+        GL.glDisable(GL.GL_DEPTH_TEST)
+        GL.glDisable(GL.GL_CULL_FACE)
+
+        GL.glUseProgram(bake_program)
+        GL.glBindVertexArray(self.vao_3d)
+
+        # Set uniforms (same as _paint_3d_scene)
+        model = self._make_rotation_matrix()
+        model_loc = GL.glGetUniformLocation(bake_program, "u_model")
+        if model_loc >= 0:
+            GL.glUniformMatrix4fv(model_loc, 1, GL.GL_TRUE, model)
+
+        for i, light in enumerate(self.lights):
+            pos_loc = GL.glGetUniformLocation(bake_program, f"u_light{i+1}_pos")
+            color_loc = GL.glGetUniformLocation(bake_program, f"u_light{i+1}_color")
+            intensity_loc = GL.glGetUniformLocation(bake_program, f"u_light{i+1}_intensity")
+            if pos_loc >= 0:
+                GL.glUniform3f(pos_loc, *light["pos"])
+            if color_loc >= 0:
+                GL.glUniform3f(color_loc, *light["color"])
+            if intensity_loc >= 0:
+                GL.glUniform1f(intensity_loc, light["intensity"])
+
+        ambient_loc = GL.glGetUniformLocation(bake_program, "u_ambient_intensity")
+        if ambient_loc >= 0:
+            GL.glUniform1f(ambient_loc, self.ambient_intensity)
+        spec_power_loc = GL.glGetUniformLocation(bake_program, "u_specular_power")
+        if spec_power_loc >= 0:
+            GL.glUniform1f(spec_power_loc, self.specular_power)
+        spec_int_loc = GL.glGetUniformLocation(bake_program, "u_specular_intensity")
+        if spec_int_loc >= 0:
+            GL.glUniform1f(spec_int_loc, self.specular_intensity)
+        cam_pos_loc = GL.glGetUniformLocation(bake_program, "u_camera_pos")
+        if cam_pos_loc >= 0:
+            GL.glUniform3f(cam_pos_loc, 0.0, 0.0, self.zoom)
+        ext_loc = GL.glGetUniformLocation(bake_program, "u_model_extent")
+        if ext_loc >= 0:
+            GL.glUniform1f(ext_loc, self._model_extent)
+
+        # PBR material uniform locations
+        bc_loc = GL.glGetUniformLocation(bake_program, "u_base_color")
+        met_loc = GL.glGetUniformLocation(bake_program, "u_metallic")
+        rough_loc = GL.glGetUniformLocation(bake_program, "u_roughness")
+        em_loc = GL.glGetUniformLocation(bake_program, "u_emissive")
+
+        GL.glActiveTexture(GL.GL_TEXTURE0)
+        tex_loc = GL.glGetUniformLocation(bake_program, "u_texture")
+        if tex_loc >= 0:
+            GL.glUniform1i(tex_loc, 0)
+
+        # Draw per material
+        if self._mesh_ranges and self._gltf_materials:
+            for start, count, mat_idx in self._mesh_ranges:
+                mat = self._gltf_materials[mat_idx] if 0 <= mat_idx < len(self._gltf_materials) else {}
+                mat_tex = self._material_texture_ids.get(mat_idx)
+                if mat_tex is not None:
+                    GL.glBindTexture(GL.GL_TEXTURE_2D, mat_tex)
+                elif hasattr(self, '_white_texture'):
+                    GL.glBindTexture(GL.GL_TEXTURE_2D, self._white_texture)
+                bc = mat.get("base_color", [1.0, 1.0, 1.0, 1.0])
+                if bc_loc >= 0:
+                    GL.glUniform4f(bc_loc, *bc)
+                if met_loc >= 0:
+                    GL.glUniform1f(met_loc, float(mat.get("metallic", 0.0)))
+                if rough_loc >= 0:
+                    GL.glUniform1f(rough_loc, float(mat.get("roughness", 0.5)))
+                em = mat.get("emissive", [0.0, 0.0, 0.0])
+                if em_loc >= 0:
+                    GL.glUniform3f(em_loc, *em)
+                GL.glDrawArrays(GL.GL_TRIANGLES, start, count)
+        else:
+            mat = self._gltf_materials[0] if self._gltf_materials else {}
+            bc = mat.get("base_color", [1.0, 1.0, 1.0, 1.0])
+            if bc_loc >= 0:
+                GL.glUniform4f(bc_loc, *bc)
+            if met_loc >= 0:
+                GL.glUniform1f(met_loc, float(mat.get("metallic", 0.0)))
+            if rough_loc >= 0:
+                GL.glUniform1f(rough_loc, float(mat.get("roughness", 0.5)))
+            em = mat.get("emissive", [0.0, 0.0, 0.0])
+            if em_loc >= 0:
+                GL.glUniform3f(em_loc, *em)
+            if self.texture_id is not None:
+                GL.glBindTexture(GL.GL_TEXTURE_2D, self.texture_id)
+            GL.glDrawArrays(GL.GL_TRIANGLES, 0, self.model_vertex_count)
+
+        GL.glFinish()
+
+        # Read back baked pixels
+        # With the flipped UV bake shader, UV Y=0 (glTF top) maps to NDC Y=+1 (FBO top).
+        # glReadPixels reads bottom-to-top, so row 0 = FBO bottom = UV Y=1 = image bottom.
+        # Flip so row 0 = image top = UV Y=0.
+        pixels = GL.glReadPixels(0, 0, bake_size, bake_size, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+        baked = np.frombuffer(pixels, dtype=np.uint8).reshape(bake_size, bake_size, 4).copy()
+        baked = np.ascontiguousarray(np.flipud(baked))
+
+        # Cleanup
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
+        GL.glDeleteFramebuffers(1, [fbo])
+        GL.glDeleteTextures([bake_tex])
+        GL.glDeleteProgram(bake_program)
+        GL.glEnable(GL.GL_DEPTH_TEST)
+
+        # Composite paint layer over baked texture
+        if include_paint and self._3d_paint_texture is not None:
+            from PIL import Image as PILImage
+            paint = self._3d_paint_texture
+            ph, pw = paint.shape[:2]
+            if (ph, pw) != (bake_size, bake_size):
+                paint_img = PILImage.fromarray(paint)
+                paint = np.array(paint_img.resize((bake_size, bake_size), PILImage.LANCZOS))
+            alpha = paint[:, :, 3:4].astype(np.float32) / 255.0
+            baked[:, :, :3] = (paint[:, :, :3].astype(np.float32) * alpha +
+                               baked[:, :, :3].astype(np.float32) * (1.0 - alpha)).astype(np.uint8)
+            baked[:, :, 3] = np.maximum(baked[:, :, 3], paint[:, :, 3])
+
+        # Dilate baked texture to fill UV seam gaps
+        baked = self._dilate_baked_texture(baked, iterations=4)
+
+        return np.ascontiguousarray(baked)
+
+    def _dilate_baked_texture(self, texture, iterations=4):
+        """Dilate painted pixels outward into transparent areas to prevent UV seam bleeding."""
+        result = texture.copy()
+        h, w = result.shape[:2]
+        for _ in range(iterations):
+            alpha = result[:, :, 3]
+            filled = alpha > 0
+            empty = ~filled
+            if not np.any(empty):
+                break
+            new = result.copy()
+            # Check 4-neighbors of each empty pixel
+            for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                shifted_filled = np.zeros_like(filled)
+                src_y = slice(max(0, dy), min(h, h + dy))
+                src_x = slice(max(0, dx), min(w, w + dx))
+                dst_y = slice(max(0, -dy), min(h, h - dy))
+                dst_x = slice(max(0, -dx), min(w, w - dx))
+                shifted_filled[dst_y, dst_x] = filled[src_y, src_x]
+                # For empty pixels that have a filled neighbor, copy the neighbor's color
+                mask = empty & shifted_filled
+                if np.any(mask):
+                    new[mask] = result[
+                        np.clip(np.where(mask)[0] + dy, 0, h - 1),
+                        np.clip(np.where(mask)[1] + dx, 0, w - 1)
+                    ]
+                    new[mask, 3] = 255
+            result = new
+        return result
+
+    def export_3d_model_glb(self, output_path, baked_texture=None):
+        """Export the 3D model as a GLB file, preserving original materials and textures.
+
+        If the model was loaded from a GLB/GLTF, re-exports with original materials
+        and composites any paint/markup onto the textures.
+        Falls back to single-material baked export for primitives or OBJ models.
+        """
+        try:
+            from pygltflib import GLTF2, Buffer, BufferView, Accessor, Image as GltfImage
+            from pygltflib import Texture as GltfTexture, TextureInfo, Material as GltfMaterial
+            from pygltflib import Mesh, Primitive, Node, Scene, Sampler, Asset
+            from pygltflib import PbrMetallicRoughness, BufferFormat
+            import pygltflib
+        except ImportError:
+            print("[EXPORT] pygltflib not available")
+            return False
+
+        from PIL import Image as PILImage
+        import io
+
+        # --- Try to re-export from original GLTF source with paint composited ---
+        source_path = self.image_path
+        if source_path and os.path.splitext(source_path)[1].lower() in ('.glb', '.gltf'):
+            return self._export_glb_from_source(output_path, source_path)
+
+        # --- Fallback: single-material baked export for primitives/OBJ ---
+        if baked_texture is None:
+            print("[EXPORT] No baked texture and no source GLTF")
+            return False
+        return self._export_glb_baked(output_path, baked_texture)
+
+    def _export_glb_from_source(self, output_path, source_path):
+        """Re-export a GLTF/GLB model with paint/markup composited onto textures."""
+        from pygltflib import GLTF2
+        from PIL import Image as PILImage
+        import io
+
+        # Load the original GLTF
+        gltf = GLTF2.load(source_path)
+        blob = bytearray(gltf.binary_blob()) if gltf.binary_blob() else bytearray()
+
+        # Composite paint onto material textures
+        if self._3d_paint_texture is not None and self._3d_original_tex_data:
+            print("[EXPORT] Compositing paint onto textures...")
+            for mat_idx, original_data in self._3d_original_tex_data.items():
+                composited = self._composite_3d_paint(mat_idx)
+                if composited is None:
+                    continue
+
+                # Find which GLTF texture index this material uses
+                if mat_idx >= len(self._gltf_materials):
+                    continue
+                mat = self._gltf_materials[mat_idx]
+                tex_idx = mat.get('base_color_texture')
+                if tex_idx is None:
+                    continue
+
+                # Find the image for this texture
+                if not gltf.textures or tex_idx >= len(gltf.textures):
+                    continue
+                gltf_tex = gltf.textures[tex_idx]
+                if gltf_tex.source is None or not gltf.images or gltf_tex.source >= len(gltf.images):
+                    continue
+
+                img_def = gltf.images[gltf_tex.source]
+
+                # Encode composited texture as PNG
+                img = PILImage.fromarray(composited)
+                png_buf = io.BytesIO()
+                img.save(png_buf, format='PNG')
+                new_png_bytes = png_buf.getvalue()
+
+                if img_def.bufferView is not None:
+                    bv = gltf.bufferViews[img_def.bufferView]
+                    old_length = bv.byteLength
+
+                    if len(new_png_bytes) <= old_length:
+                        # Fits in place — overwrite
+                        blob[bv.byteOffset:bv.byteOffset + len(new_png_bytes)] = new_png_bytes
+                        # Zero out remaining space
+                        blob[bv.byteOffset + len(new_png_bytes):bv.byteOffset + old_length] = b'\x00' * (old_length - len(new_png_bytes))
+                        bv.byteLength = len(new_png_bytes)
+                    else:
+                        # Append to end of blob
+                        pad = (4 - len(blob) % 4) % 4
+                        blob.extend(b'\x00' * pad)
+                        new_offset = len(blob)
+                        blob.extend(new_png_bytes)
+                        bv.byteOffset = new_offset
+                        bv.byteLength = len(new_png_bytes)
+
+                    print(f"  Composited paint onto texture {tex_idx} (mat {mat_idx}): "
+                          f"{old_length} -> {len(new_png_bytes)} bytes")
+
+            # Update buffer length
+            if gltf.buffers:
+                gltf.buffers[0].byteLength = len(blob)
+
+        # Save the modified GLB
+        gltf.set_binary_blob(bytes(blob))
+        gltf.save_binary(output_path)
+        print(f"[EXPORT] GLB saved to {output_path} (re-exported from source)")
+        return True
+
+    def _export_glb_baked(self, output_path, baked_texture):
+        """Export as single-material GLB with baked texture (for primitives/OBJ)."""
+        from pygltflib import GLTF2, Buffer, BufferView, Accessor, Image as GltfImage
+        from pygltflib import Texture as GltfTexture, TextureInfo, Material as GltfMaterial
+        from pygltflib import Mesh, Primitive, Node, Scene, Sampler, Asset
+        from pygltflib import PbrMetallicRoughness
+        import pygltflib
+        from PIL import Image as PILImage
+        import io
+
+        verts = self.model_vertices
+        vertex_count = self.model_vertex_count
+        stride = 8
+
+        verts_reshaped = verts.reshape(vertex_count, stride)
+        positions = verts_reshaped[:, 0:3].copy()
+        uvs = verts_reshaped[:, 3:5].copy()
+        normals = verts_reshaped[:, 5:8].copy()
+
+        center = getattr(self, '_model_center', None)
+        if center is not None:
+            positions += center
+
+        # Encode baked texture as PNG
+        img = PILImage.fromarray(baked_texture)
+        png_buf = io.BytesIO()
+        img.save(png_buf, format='PNG')
+        png_bytes = png_buf.getvalue()
+
+        pos_bytes = positions.tobytes()
+        norm_bytes = normals.tobytes()
+        uv_bytes = uvs.tobytes()
+
+        def pad4(data):
+            remainder = len(data) % 4
+            return data + b'\x00' * (4 - remainder) if remainder else data
+
+        pos_p = pad4(pos_bytes)
+        norm_p = pad4(norm_bytes)
+        uv_p = pad4(uv_bytes)
+        png_p = pad4(png_bytes)
+        binary_blob = pos_p + norm_p + uv_p + png_p
+
+        pos_min = positions.min(axis=0).tolist()
+        pos_max = positions.max(axis=0).tolist()
+
+        gltf = GLTF2()
+        gltf.asset = Asset(version="2.0", generator="Shade Studio")
+        gltf.buffers = [Buffer(byteLength=len(binary_blob))]
+
+        norm_off = len(pos_p)
+        uv_off = norm_off + len(norm_p)
+        img_off = uv_off + len(uv_p)
+
+        gltf.bufferViews = [
+            BufferView(buffer=0, byteOffset=0, byteLength=len(pos_bytes), target=pygltflib.ARRAY_BUFFER),
+            BufferView(buffer=0, byteOffset=norm_off, byteLength=len(norm_bytes), target=pygltflib.ARRAY_BUFFER),
+            BufferView(buffer=0, byteOffset=uv_off, byteLength=len(uv_bytes), target=pygltflib.ARRAY_BUFFER),
+            BufferView(buffer=0, byteOffset=img_off, byteLength=len(png_bytes)),
+        ]
+
+        gltf.accessors = [
+            Accessor(bufferView=0, componentType=pygltflib.FLOAT, count=vertex_count, type="VEC3", max=pos_max, min=pos_min),
+            Accessor(bufferView=1, componentType=pygltflib.FLOAT, count=vertex_count, type="VEC3"),
+            Accessor(bufferView=2, componentType=pygltflib.FLOAT, count=vertex_count, type="VEC2"),
+        ]
+
+        gltf.images = [GltfImage(bufferView=3, mimeType="image/png")]
+        gltf.samplers = [Sampler(magFilter=pygltflib.LINEAR, minFilter=pygltflib.LINEAR)]
+        gltf.textures = [GltfTexture(source=0, sampler=0)]
+        gltf.materials = [GltfMaterial(
+            pbrMetallicRoughness=PbrMetallicRoughness(
+                baseColorTexture=TextureInfo(index=0), metallicFactor=0.0, roughnessFactor=1.0),
+            name="Baked Material")]
+        gltf.meshes = [Mesh(primitives=[Primitive(
+            attributes=pygltflib.Attributes(POSITION=0, NORMAL=1, TEXCOORD_0=2), material=0)])]
+        gltf.nodes = [Node(mesh=0)]
+        gltf.scenes = [Scene(nodes=[0])]
+        gltf.scene = 0
+
+        gltf.set_binary_blob(binary_blob)
+        gltf.save_binary(output_path)
+        print(f"[EXPORT] GLB saved to {output_path} (baked)")
+        return True
+
+    def export_3d_model_obj(self, output_path, baked_texture):
+        """Export the 3D model as OBJ + MTL + PNG texture files."""
+        from PIL import Image as PILImage
+        import os
+
+        base, _ = os.path.splitext(output_path)
+        mtl_path = base + ".mtl"
+        tex_path = base + "_baked.png"
+        mtl_name = os.path.basename(mtl_path)
+        tex_name = os.path.basename(tex_path)
+        obj_name = os.path.basename(base)
+
+        # Save baked texture
+        img = PILImage.fromarray(baked_texture)
+        img.save(tex_path)
+
+        # Write MTL file
+        with open(mtl_path, 'w') as f:
+            f.write(f"# Shade Studio Baked Material\n")
+            f.write(f"newmtl BakedMaterial\n")
+            f.write(f"Ka 1.0 1.0 1.0\n")
+            f.write(f"Kd 1.0 1.0 1.0\n")
+            f.write(f"Ks 0.0 0.0 0.0\n")
+            f.write(f"Ns 0.0\n")
+            f.write(f"d 1.0\n")
+            f.write(f"map_Kd {tex_name}\n")
+
+        # Extract vertex data
+        verts = self.model_vertices
+        vertex_count = self.model_vertex_count
+        stride = 8
+        center = getattr(self, '_model_center', np.zeros(3))
+
+        with open(output_path, 'w') as f:
+            f.write(f"# Shade Studio Export\n")
+            f.write(f"mtllib {mtl_name}\n\n")
+
+            # Write vertices (un-centered to original positions)
+            for i in range(vertex_count):
+                base_idx = i * stride
+                px = verts[base_idx] + center[0]
+                py = verts[base_idx+1] + center[1]
+                pz = verts[base_idx+2] + center[2]
+                f.write(f"v {px:.6f} {py:.6f} {pz:.6f}\n")
+
+            f.write("\n")
+            for i in range(vertex_count):
+                base_idx = i * stride
+                f.write(f"vt {verts[base_idx+3]:.6f} {verts[base_idx+4]:.6f}\n")
+
+            f.write("\n")
+            for i in range(vertex_count):
+                base_idx = i * stride
+                f.write(f"vn {verts[base_idx+5]:.6f} {verts[base_idx+6]:.6f} {verts[base_idx+7]:.6f}\n")
+
+            f.write(f"\nusemtl BakedMaterial\n")
+
+            # Write faces (1-based indexing, 3 verts per triangle)
+            for i in range(0, vertex_count, 3):
+                v1, v2, v3 = i + 1, i + 2, i + 3
+                f.write(f"f {v1}/{v1}/{v1} {v2}/{v2}/{v2} {v3}/{v3}/{v3}\n")
+
+        print(f"[EXPORT] OBJ saved to {output_path}")
+        return True
 
     # --- AOV Render Passes ---
 
@@ -19933,6 +20502,11 @@ class ShaderStudio(QtWidgets.QMainWindow):
         export_action.triggered.connect(self.export_image)
         file_menu.addAction(export_action)
 
+        export_3d_action = QtGui.QAction("Export 3D Model (Baked)...", self)
+        export_3d_action.setShortcut("Ctrl+Shift+E")
+        export_3d_action.triggered.connect(self.export_3d_model)
+        file_menu.addAction(export_3d_action)
+
         batch_action = QtGui.QAction("Batch Process...", self)
         batch_action.triggered.connect(self.batch_process)
         file_menu.addAction(batch_action)
@@ -24176,6 +24750,174 @@ Only respond with valid JSON, no other text. Example:
                     self, "Export Failed",
                     f"Error exporting image: {e}"
                 )
+
+    def export_3d_model(self):
+        """Show export dialog and export 3D model with textures/paint."""
+        if not self.canvas.mode_3d:
+            QtWidgets.QMessageBox.warning(
+                self, "Not in 3D Mode",
+                "Load a 3D model first before exporting."
+            )
+            return
+
+        if self.canvas.model_vertices is None or self.canvas.model_vertex_count == 0:
+            QtWidgets.QMessageBox.warning(self, "No Model", "No 3D model loaded.")
+            return
+
+        # Check if source is a GLTF/GLB (can re-export directly)
+        source_path = self.canvas.image_path
+        is_gltf_source = (source_path and
+                          os.path.splitext(source_path)[1].lower() in ('.glb', '.gltf'))
+
+        # Export options dialog
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Export 3D Model")
+        dlg.setMinimumWidth(350)
+        layout = QtWidgets.QVBoxLayout(dlg)
+
+        # Format
+        fmt_group = QtWidgets.QGroupBox("Format")
+        fmt_layout = QtWidgets.QVBoxLayout(fmt_group)
+        glb_radio = QtWidgets.QRadioButton("GLB (GLTF Binary) — recommended")
+        obj_radio = QtWidgets.QRadioButton("OBJ + MTL + PNG (baked lighting)")
+        glb_radio.setChecked(True)
+        fmt_layout.addWidget(glb_radio)
+        fmt_layout.addWidget(obj_radio)
+        layout.addWidget(fmt_group)
+
+        # Info label for GLB re-export
+        if is_gltf_source:
+            info = QtWidgets.QLabel(
+                "GLB export preserves original materials, textures,\n"
+                "and PBR properties. Paint/markup is composited\n"
+                "onto the texture maps.")
+            info.setStyleSheet("color: rgba(255,255,255,0.5); font-size: 11px; padding: 4px;")
+            layout.addWidget(info)
+
+        # Bake resolution (only for OBJ or non-GLTF sources)
+        res_group = QtWidgets.QGroupBox("Bake Resolution (OBJ / Primitives)")
+        res_layout = QtWidgets.QHBoxLayout(res_group)
+        res_combo = QtWidgets.QComboBox()
+        res_combo.addItems(["512", "1024", "2048", "4096"])
+        res_combo.setCurrentText("2048")
+        res_layout.addWidget(QtWidgets.QLabel("Texture Size:"))
+        res_layout.addWidget(res_combo)
+        layout.addWidget(res_group)
+
+        # Options
+        opt_group = QtWidgets.QGroupBox("Options")
+        opt_layout = QtWidgets.QVBoxLayout(opt_group)
+        paint_cb = QtWidgets.QCheckBox("Include Paint/Markup")
+        paint_cb.setChecked(True)
+        opt_layout.addWidget(paint_cb)
+        layout.addWidget(opt_group)
+
+        # Buttons
+        btn_layout = QtWidgets.QHBoxLayout()
+        cancel_btn = QtWidgets.QPushButton("Cancel")
+        export_btn = QtWidgets.QPushButton("Export")
+        export_btn.setDefault(True)
+        btn_layout.addStretch()
+        btn_layout.addWidget(cancel_btn)
+        btn_layout.addWidget(export_btn)
+        layout.addLayout(btn_layout)
+
+        cancel_btn.clicked.connect(dlg.reject)
+        export_btn.clicked.connect(dlg.accept)
+
+        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+
+        bake_size = int(res_combo.currentText())
+        include_paint = paint_cb.isChecked()
+        use_glb = glb_radio.isChecked()
+
+        # Choose save path
+        if use_glb:
+            path, _ = QtWidgets.QFileDialog.getSaveFileName(
+                self, "Export GLB", "model_export.glb",
+                "GLB Files (*.glb);;All Files (*)"
+            )
+        else:
+            path, _ = QtWidgets.QFileDialog.getSaveFileName(
+                self, "Export OBJ", "model_export.obj",
+                "OBJ Files (*.obj);;All Files (*)"
+            )
+
+        if not path:
+            return
+
+        # Show progress
+        progress = QtWidgets.QProgressDialog("Exporting model...", "Cancel", 0, 3, self)
+        progress.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        QtWidgets.QApplication.processEvents()
+
+        try:
+            if use_glb and is_gltf_source:
+                # Direct re-export from source GLB with paint composited
+                progress.setLabelText("Re-exporting with paint composited...")
+                progress.setValue(1)
+                QtWidgets.QApplication.processEvents()
+
+                success = self.canvas.export_3d_model_glb(path)
+                progress.setValue(3)
+                progress.close()
+
+                if success:
+                    QtWidgets.QMessageBox.information(
+                        self, "Export Complete",
+                        f"3D model exported to:\n{path}\n\n"
+                        f"Original materials and textures preserved.\n"
+                        f"Paint/markup composited onto textures."
+                    )
+                else:
+                    QtWidgets.QMessageBox.warning(self, "Export Failed", "Failed to write model file.")
+                return
+
+            # Bake UV texture for OBJ or primitive models
+            progress.setLabelText("Baking UV texture with lighting...")
+            progress.setValue(1)
+            QtWidgets.QApplication.processEvents()
+
+            baked = self.canvas._bake_uv_texture(bake_size, include_paint)
+            if baked is None:
+                progress.close()
+                QtWidgets.QMessageBox.warning(self, "Bake Failed", "Failed to bake UV texture.")
+                return
+
+            # Step 2: Export model
+            progress.setLabelText("Writing model file...")
+            progress.setValue(2)
+            QtWidgets.QApplication.processEvents()
+
+            if use_glb:
+                success = self.canvas.export_3d_model_glb(path, baked)
+            else:
+                success = self.canvas.export_3d_model_obj(path, baked)
+
+            progress.setValue(3)
+            progress.close()
+
+            if success:
+                QtWidgets.QMessageBox.information(
+                    self, "Export Complete",
+                    f"3D model exported to:\n{path}\n\n"
+                    f"Bake resolution: {bake_size}x{bake_size}\n"
+                    f"Format: {'GLB' if use_glb else 'OBJ + MTL + PNG'}"
+                )
+            else:
+                QtWidgets.QMessageBox.warning(self, "Export Failed", "Failed to write model file.")
+
+        except Exception as e:
+            progress.close()
+            import traceback
+            traceback.print_exc()
+            QtWidgets.QMessageBox.warning(
+                self, "Export Failed",
+                f"Error exporting 3D model:\n{e}"
+            )
 
     def _export_svg_trace(self, img, path):
         """Export a traced SVG from the image using OpenCV contours."""
