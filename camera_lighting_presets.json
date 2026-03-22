@@ -1,0 +1,113 @@
+{
+  "camera_presets": {},
+  "lighting_presets": {
+    "Standard Lighting": {
+      "lights": [
+        {
+          "pos": [
+            62.14213180738464,
+            17.389068649150953,
+            31.662997641699704
+          ],
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "intensity": 3.0
+        },
+        {
+          "pos": [
+            0.0,
+            13.237467000817814,
+            53.09258025519001
+          ],
+          "color": [
+            1.0,
+            0.8,
+            0.6
+          ],
+          "intensity": 3.0
+        },
+        {
+          "pos": [
+            28.90546408662385,
+            8.020482512363596,
+            24.254564254094188
+          ],
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "intensity": 1.65
+        }
+      ],
+      "ambient_intensity": 1.0,
+      "specular_power": 128.0,
+      "specular_intensity": 0.0
+    },
+    "Toon Lighting": {
+      "lights": [
+        {
+          "pos": [
+            -27.802106150731014,
+            20.168924875895208,
+            33.13325988681927
+          ],
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "intensity": 4.95
+        }
+      ],
+      "ambient_intensity": 1.36,
+      "specular_power": 1.0,
+      "specular_intensity": 0.0
+    }
+  },
+  "cameras": {
+    "Camera 1": {
+      "rotation_x": -64.1,
+      "rotation_y": -721.5,
+      "rotation_z": 0.0,
+      "zoom": 63.530511888477385,
+      "pan_x": 0.0,
+      "pan_y": 0.0,
+      "fov": 45.0,
+      "near_plane": 0.1,
+      "far_plane": 100.0,
+      "auto_rotate": false,
+      "rotation_speed": 1.0
+    },
+    "Camera 2": {
+      "rotation_x": 3.6,
+      "rotation_y": -93.6,
+      "rotation_z": 0.0,
+      "zoom": 38.685440142253526,
+      "pan_x": 0.0,
+      "pan_y": 0.0,
+      "fov": 45.0,
+      "near_plane": 0.1,
+      "far_plane": 100.0,
+      "auto_rotate": false,
+      "rotation_speed": 1.0
+    },
+    "Camera 3": {
+      "rotation_x": 16.0,
+      "rotation_y": 301.5,
+      "rotation_z": 0.0,
+      "zoom": 39.89294979172533,
+      "pan_x": 0.0,
+      "pan_y": 0.0,
+      "fov": 45.0,
+      "near_plane": 0.1,
+      "far_plane": 100.0,
+      "auto_rotate": false,
+      "rotation_speed": 1.0
+    }
+  },
+  "active_camera": "Camera 3"
+}

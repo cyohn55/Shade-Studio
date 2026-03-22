@@ -225,5 +225,51 @@
       "contrast": 1.0,
       "monochrome": 0.0
     }
+  },
+  "Toon 3D": {
+    "base_shader": "Toon Shader",
+    "params": {
+      "color_bands": 6.37,
+      "edge_thickness": 0.5,
+      "edge_threshold": 0.14867,
+      "edge_softness": 0.0956,
+      "saturation_boost": 0.948,
+      "brightness_boost": 0.0020000000000000018,
+      "shadow_intensity": 0.0,
+      "highlight_intensity": 0.0,
+      "outline_color_r": 0.0,
+      "outline_color_g": 0.0,
+      "outline_color_b": 0.0,
+      "quantize_hue": 0.52,
+      "brightness": 0.0,
+      "contrast": 1.0,
+      "saturation": 1.0,
+      "gamma": 1.0,
+      "hue_shift": 0.0,
+      "vignette": 0.0
+    }
+  },
+  "Toon 3D -1": {
+    "base_shader": "Toon Shader",
+    "params": {
+      "color_bands": 6.37,
+      "edge_thickness": 0.5,
+      "edge_threshold": 0.20208,
+      "edge_softness": 0.0956,
+      "saturation_boost": 0.903,
+      "brightness_boost": 0.17400000000000004,
+      "shadow_intensity": 0.396,
+      "highlight_intensity": 0.0,
+      "outline_color_r": 0.0,
+      "outline_color_g": 0.0,
+      "outline_color_b": 0.0,
+      "quantize_hue": 0.0,
+      "brightness": 0.0,
+      "contrast": 1.0,
+      "saturation": 1.0,
+      "gamma": 1.0,
+      "hue_shift": 0.0,
+      "vignette": 0.0
+    }
   }
 }

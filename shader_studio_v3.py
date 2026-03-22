@@ -5,13 +5,15 @@ Features: 2D/3D rendering, custom presets, AI upscaling, video processing,
 """
 
 import sys
+import faulthandler
+faulthandler.enable()
 import numpy as np
 from PyQt6 import QtWidgets, QtCore, QtGui, QtOpenGL
 from PyQt6.QtWidgets import QSplitter
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from PyQt6.QtOpenGL import QOpenGLShaderProgram, QOpenGLShader, QOpenGLTexture
 from OpenGL import GL
-from PIL import Image, ImageFilter
+from PIL import Image, ImageFilter, ImageDraw, ImageFont
 import os
 import json
 import math
@@ -21,6 +23,7 @@ import random
 import tempfile
 import subprocess
 import copy
+import colorsys
 
 # Try to import video processing
 VIDEO_AVAILABLE = False
@@ -67,6 +70,49 @@ try:
 except ImportError:
     pass  # FBX SDK is rarely available
 
+# Check for WebP support (Pillow 4.0+ always has it)
+WEBP_AVAILABLE = False
+try:
+    import io as _io_test
+    _buf = _io_test.BytesIO()
+    Image.new('RGBA', (1, 1)).save(_buf, format='WEBP')
+    WEBP_AVAILABLE = True
+    print("WebP export available")
+except Exception:
+    print("WebP export not available")
+
+# Check for AVIF support (Pillow 10+ with codec)
+AVIF_AVAILABLE = False
+try:
+    _buf = _io_test.BytesIO()
+    Image.new('RGBA', (1, 1)).save(_buf, format='AVIF')
+    AVIF_AVAILABLE = True
+    print("AVIF export available")
+except Exception:
+    print("AVIF export not available")
+
+# EXR/HDR export via imageio — test actual write capability
+EXR_AVAILABLE = False
+HDR_AVAILABLE = False
+if GIF_AVAILABLE:
+    import tempfile as _tf
+    try:
+        _tmp = os.path.join(_tf.gettempdir(), '_ss_test.exr')
+        imageio.imwrite(_tmp, np.zeros((2, 2, 4), dtype=np.float32))
+        os.remove(_tmp)
+        EXR_AVAILABLE = True
+        print("EXR export available")
+    except Exception:
+        print("EXR export not available")
+    try:
+        _tmp = os.path.join(_tf.gettempdir(), '_ss_test.hdr')
+        imageio.imwrite(_tmp, np.zeros((2, 2, 3), dtype=np.float32), format='HDR')
+        os.remove(_tmp)
+        HDR_AVAILABLE = True
+        print("HDR export available")
+    except Exception:
+        print("HDR export not available")
+
 # --- PRESET STORAGE ---
 PRESETS_FILE = Path(__file__).parent / "shader_presets.json"
 USER_PRESETS = {}  # Will be loaded from file
@@ -95,6 +141,86 @@ def save_user_presets():
 
 # Load presets on startup
 load_user_presets()
+
+# --- CAMERA & LIGHTING PRESETS ---
+CAM_LIGHT_PRESETS_FILE = Path(__file__).parent / "camera_lighting_presets.json"
+CAM_LIGHT_DATA = {
+    "camera_presets": {},
+    "lighting_presets": {},
+    "cameras": {},
+    "active_camera": "Camera 1",
+}
+
+# Built-in camera presets (non-deletable standard views)
+BUILTIN_CAMERA_PRESETS = {
+    "Front":    {"rotation_x": 0.0,  "rotation_y": 0.0,   "rotation_z": 0.0, "pan_x": 0.0, "pan_y": 0.0, "fov": 45.0},
+    "Back":     {"rotation_x": 0.0,  "rotation_y": 180.0, "rotation_z": 0.0, "pan_x": 0.0, "pan_y": 0.0, "fov": 45.0},
+    "Left":     {"rotation_x": 0.0,  "rotation_y": -90.0, "rotation_z": 0.0, "pan_x": 0.0, "pan_y": 0.0, "fov": 45.0},
+    "Right":    {"rotation_x": 0.0,  "rotation_y": 90.0,  "rotation_z": 0.0, "pan_x": 0.0, "pan_y": 0.0, "fov": 45.0},
+    "Top":      {"rotation_x": -90.0, "rotation_y": 0.0,  "rotation_z": 0.0, "pan_x": 0.0, "pan_y": 0.0, "fov": 45.0},
+    "Bottom":   {"rotation_x": 90.0,  "rotation_y": 0.0,  "rotation_z": 0.0, "pan_x": 0.0, "pan_y": 0.0, "fov": 45.0},
+    "3/4 View": {"rotation_x": 25.0,  "rotation_y": 45.0, "rotation_z": 0.0, "pan_x": 0.0, "pan_y": 0.0, "fov": 45.0},
+}
+
+# Built-in lighting presets (non-deletable, use absolute positions — adjust via model extent at apply time if needed)
+BUILTIN_LIGHTING_PRESETS = {
+    "Default 3-Point": {
+        "lights": [
+            {"pos": [4.0, 4.0, 4.0], "color": [1.0, 1.0, 1.0], "intensity": 1.5},
+            {"pos": [-4.0, 2.4, 1.2], "color": [0.3, 0.5, 1.0], "intensity": 0.8},
+            {"pos": [0.0, -1.6, 4.0], "color": [1.0, 0.8, 0.6], "intensity": 0.5},
+        ],
+        "ambient_intensity": 0.2, "specular_power": 32.0, "specular_intensity": 0.5,
+    },
+    "Single Key": {
+        "lights": [
+            {"pos": [3.0, 5.0, 4.0], "color": [1.0, 1.0, 1.0], "intensity": 2.0},
+        ],
+        "ambient_intensity": 0.15, "specular_power": 48.0, "specular_intensity": 0.6,
+    },
+    "Rim Light": {
+        "lights": [
+            {"pos": [0.0, 2.0, 5.0], "color": [1.0, 1.0, 1.0], "intensity": 0.6},
+            {"pos": [-3.0, 1.0, -4.0], "color": [0.8, 0.9, 1.0], "intensity": 2.0},
+            {"pos": [3.0, 1.0, -4.0], "color": [1.0, 0.9, 0.8], "intensity": 2.0},
+        ],
+        "ambient_intensity": 0.05, "specular_power": 64.0, "specular_intensity": 0.8,
+    },
+    "Flat / Even": {
+        "lights": [
+            {"pos": [0.0, 4.0, 4.0], "color": [1.0, 1.0, 1.0], "intensity": 0.8},
+        ],
+        "ambient_intensity": 0.6, "specular_power": 16.0, "specular_intensity": 0.2,
+    },
+}
+
+def load_cam_light_data():
+    """Load camera/lighting presets and camera slots from JSON file."""
+    global CAM_LIGHT_DATA
+    if CAM_LIGHT_PRESETS_FILE.exists():
+        try:
+            with open(CAM_LIGHT_PRESETS_FILE, 'r') as f:
+                CAM_LIGHT_DATA = json.load(f)
+            print(f"Loaded camera/lighting data ({len(CAM_LIGHT_DATA.get('camera_presets', {}))} cam presets, "
+                  f"{len(CAM_LIGHT_DATA.get('lighting_presets', {}))} light presets, "
+                  f"{len(CAM_LIGHT_DATA.get('cameras', {}))} cameras)")
+        except Exception as e:
+            print(f"Error loading camera/lighting data: {e}")
+    # Ensure all keys exist
+    CAM_LIGHT_DATA.setdefault("camera_presets", {})
+    CAM_LIGHT_DATA.setdefault("lighting_presets", {})
+    CAM_LIGHT_DATA.setdefault("cameras", {})
+    CAM_LIGHT_DATA.setdefault("active_camera", "Camera 1")
+
+def save_cam_light_data():
+    """Save camera/lighting presets and camera slots to JSON file."""
+    try:
+        with open(CAM_LIGHT_PRESETS_FILE, 'w') as f:
+            json.dump(CAM_LIGHT_DATA, f, indent=2)
+    except Exception as e:
+        print(f"Error saving camera/lighting data: {e}")
+
+load_cam_light_data()
 
 # --- RECENT FILES ---
 SETTINGS_FILE = Path(__file__).parent / "shader_settings.json"
@@ -134,6 +260,34 @@ def add_recent_file(path):
     save_settings()
 
 load_settings()
+
+# --- Custom AI Models ---
+CUSTOM_MODELS_FILE = Path(__file__).parent / "ai_models.json"
+CUSTOM_AI_MODELS = {}
+
+def load_custom_models():
+    """Load user-defined AI models from JSON file and merge into AI_MODELS."""
+    global CUSTOM_AI_MODELS
+    if CUSTOM_MODELS_FILE.exists():
+        try:
+            with open(CUSTOM_MODELS_FILE, 'r') as f:
+                CUSTOM_AI_MODELS = json.load(f)
+            print(f"Loaded {len(CUSTOM_AI_MODELS)} custom AI models")
+        except Exception as e:
+            print(f"Error loading custom AI models: {e}")
+            CUSTOM_AI_MODELS = {}
+    # Merge will happen after AI_MODELS is defined (called from module level)
+
+def save_custom_models():
+    """Save user-defined AI models to JSON file."""
+    try:
+        with open(CUSTOM_MODELS_FILE, 'w') as f:
+            json.dump(CUSTOM_AI_MODELS, f, indent=2)
+        print(f"Saved {len(CUSTOM_AI_MODELS)} custom AI models")
+    except Exception as e:
+        print(f"Error saving custom AI models: {e}")
+
+load_custom_models()
 
 # --- HOTKEYS ---
 HOTKEYS = {
@@ -378,83 +532,394 @@ def apply_texture_overlay(image, overlay_path, blend_mode="multiply", opacity=0.
 
 
 # --- GLTF/GLB LOADER ---
+
+def _gltf_read_accessor(gltf, accessor_idx, binary_data, components):
+    """Read an accessor from GLTF binary data, respecting byteStride and componentType.
+    Handles float32, normalized int8/uint8/int16/uint16. Returns list of tuples of floats."""
+    accessor = gltf.accessors[accessor_idx]
+    buffer_view = gltf.bufferViews[accessor.bufferView]
+    bv_offset = buffer_view.byteOffset or 0
+    acc_offset = accessor.byteOffset or 0
+    offset = bv_offset + acc_offset
+    count = accessor.count
+    comp_type = accessor.componentType
+    normalized = getattr(accessor, 'normalized', False)
+    byte_stride = buffer_view.byteStride
+
+    # Component type info: (struct_fmt, byte_size, normalization_divisor)
+    COMP_TYPES = {
+        5120: ('b', 1, 127.0),       # BYTE
+        5121: ('B', 1, 255.0),       # UNSIGNED_BYTE
+        5122: ('h', 2, 32767.0),     # SHORT
+        5123: ('H', 2, 65535.0),     # UNSIGNED_SHORT
+        5125: ('I', 4, 4294967295.0),# UNSIGNED_INT
+        5126: ('f', 4, 1.0),        # FLOAT
+    }
+    fmt_char, comp_size, norm_div = COMP_TYPES.get(comp_type, ('f', 4, 1.0))
+    element_size = components * comp_size
+
+    if byte_stride and byte_stride > element_size:
+        stride = byte_stride
+    else:
+        stride = element_size
+
+    fmt = fmt_char * components
+    is_float = (comp_type == 5126)
+    result = []
+    for i in range(count):
+        idx = offset + i * stride
+        vals = struct.unpack_from(fmt, binary_data, idx)
+        if not is_float and normalized:
+            vals = tuple(v / norm_div for v in vals)
+        elif not is_float:
+            vals = tuple(float(v) for v in vals)
+        result.append(vals)
+    return result
+
+
+def _gltf_read_indices(gltf, accessor_idx, binary_data):
+    """Read index accessor from GLTF binary data. Returns list of ints."""
+    accessor = gltf.accessors[accessor_idx]
+    buffer_view = gltf.bufferViews[accessor.bufferView]
+    bv_offset = buffer_view.byteOffset or 0
+    acc_offset = accessor.byteOffset or 0
+    offset = bv_offset + acc_offset
+    count = accessor.count
+    comp_type = accessor.componentType
+
+    # 5121=UNSIGNED_BYTE, 5123=UNSIGNED_SHORT, 5125=UNSIGNED_INT
+    if comp_type == 5121:
+        fmt, size = 'B', 1
+    elif comp_type == 5123:
+        fmt, size = 'H', 2
+    elif comp_type == 5125:
+        fmt, size = 'I', 4
+    else:
+        fmt, size = 'H', 2  # fallback
+
+    byte_stride = buffer_view.byteStride
+    stride = byte_stride if byte_stride and byte_stride > size else size
+
+    indices = []
+    for i in range(count):
+        idx = offset + i * stride
+        val = struct.unpack_from(fmt, binary_data, idx)[0]
+        indices.append(val)
+    return indices
+
+
+def _gltf_quat_to_matrix(q):
+    """Convert quaternion [x, y, z, w] to 4x4 rotation matrix."""
+    x, y, z, w = q
+    return np.array([
+        [1 - 2*(y*y + z*z),     2*(x*y - w*z),     2*(x*z + w*y), 0],
+        [    2*(x*y + w*z), 1 - 2*(x*x + z*z),     2*(y*z - w*x), 0],
+        [    2*(x*z - w*y),     2*(y*z + w*x), 1 - 2*(x*x + y*y), 0],
+        [                0,                 0,                 0,  1],
+    ], dtype=np.float64)
+
+
+def _gltf_node_matrix(node):
+    """Compute a 4x4 transform matrix from a GLTF node's TRS or matrix."""
+    if hasattr(node, 'matrix') and node.matrix is not None:
+        # Column-major in GLTF spec → reshape and transpose to row-major
+        m = np.array(node.matrix, dtype=np.float64).reshape(4, 4).T
+        return m
+    mat = np.eye(4, dtype=np.float64)
+    if hasattr(node, 'scale') and node.scale is not None:
+        s = node.scale
+        mat = np.diag([s[0], s[1], s[2], 1.0]).astype(np.float64)
+    if hasattr(node, 'rotation') and node.rotation is not None:
+        r = _gltf_quat_to_matrix(node.rotation)
+        mat = r @ mat
+    if hasattr(node, 'translation') and node.translation is not None:
+        t = node.translation
+        trans = np.eye(4, dtype=np.float64)
+        trans[0, 3] = t[0]
+        trans[1, 3] = t[1]
+        trans[2, 3] = t[2]
+        mat = trans @ mat
+    return mat
+
+
+def _gltf_collect_nodes(gltf, node_idx, parent_transform, mesh_transforms, light_nodes):
+    """Recursively walk the node tree and collect world transforms for meshes and lights."""
+    node = gltf.nodes[node_idx]
+    local = _gltf_node_matrix(node)
+    world = parent_transform @ local
+
+    if node.mesh is not None:
+        mesh_transforms.setdefault(node.mesh, []).append(world)
+
+    # Check for light extension (KHR_lights_punctual)
+    if hasattr(node, 'extensions') and node.extensions is not None:
+        ext = node.extensions
+        if isinstance(ext, dict) and 'KHR_lights_punctual' in ext:
+            light_idx = ext['KHR_lights_punctual'].get('light')
+            if light_idx is not None:
+                light_nodes.append((light_idx, world))
+
+    if node.children:
+        for child_idx in node.children:
+            _gltf_collect_nodes(gltf, child_idx, world, mesh_transforms, light_nodes)
+
+
+def _gltf_extract_materials(gltf):
+    """Extract PBR material data from GLTF. Returns list of material dicts."""
+    materials = []
+    if not hasattr(gltf, 'materials') or gltf.materials is None:
+        return materials
+    for mat in gltf.materials:
+        m = {
+            'base_color': [1.0, 1.0, 1.0, 1.0],
+            'metallic': 0.0,
+            'roughness': 0.5,
+            'emissive': [0.0, 0.0, 0.0],
+            'base_color_texture': None,  # texture index
+        }
+        if hasattr(mat, 'pbrMetallicRoughness') and mat.pbrMetallicRoughness is not None:
+            pbr = mat.pbrMetallicRoughness
+            if hasattr(pbr, 'baseColorFactor') and pbr.baseColorFactor is not None:
+                m['base_color'] = list(pbr.baseColorFactor)
+            if hasattr(pbr, 'metallicFactor') and pbr.metallicFactor is not None:
+                m['metallic'] = pbr.metallicFactor
+            if hasattr(pbr, 'roughnessFactor') and pbr.roughnessFactor is not None:
+                m['roughness'] = pbr.roughnessFactor
+            if hasattr(pbr, 'baseColorTexture') and pbr.baseColorTexture is not None:
+                m['base_color_texture'] = pbr.baseColorTexture.index
+        if hasattr(mat, 'emissiveFactor') and mat.emissiveFactor is not None:
+            m['emissive'] = list(mat.emissiveFactor)
+        materials.append(m)
+    return materials
+
+
+def _gltf_load_texture_image(gltf, texture_idx, buffer_data_cache, filepath):
+    """Load a texture image from GLTF. Returns PIL Image or None."""
+    import io as _io
+    try:
+        if texture_idx is None or not hasattr(gltf, 'textures') or gltf.textures is None:
+            return None
+        if texture_idx >= len(gltf.textures):
+            return None
+        tex = gltf.textures[texture_idx]
+        if tex.source is None or not hasattr(gltf, 'images') or gltf.images is None:
+            return None
+        if tex.source >= len(gltf.images):
+            return None
+        img_def = gltf.images[tex.source]
+
+        # Image from buffer view (embedded in GLB)
+        if hasattr(img_def, 'bufferView') and img_def.bufferView is not None:
+            bv = gltf.bufferViews[img_def.bufferView]
+            buf_data = buffer_data_cache.get(bv.buffer, b'')
+            offset = bv.byteOffset or 0
+            length = bv.byteLength
+            img_bytes = buf_data[offset:offset + length]
+            return Image.open(_io.BytesIO(img_bytes)).convert('RGBA')
+
+        # Image from external URI
+        if hasattr(img_def, 'uri') and img_def.uri:
+            img_path = Path(filepath).parent / img_def.uri
+            if img_path.exists():
+                return Image.open(str(img_path)).convert('RGBA')
+
+    except Exception as e:
+        print(f"Warning: Could not load GLTF texture {texture_idx}: {e}")
+    return None
+
+
+def _gltf_extract_lights(gltf, light_nodes):
+    """Extract lights from KHR_lights_punctual extension. Returns list of light dicts."""
+    lights = []
+    ext = None
+    if hasattr(gltf, 'extensions') and gltf.extensions is not None:
+        if isinstance(gltf.extensions, dict):
+            ext = gltf.extensions.get('KHR_lights_punctual')
+
+    if ext is None or 'lights' not in ext:
+        return lights
+
+    gltf_lights = ext['lights']
+    for light_idx, world_transform in light_nodes:
+        if light_idx >= len(gltf_lights):
+            continue
+        gl = gltf_lights[light_idx]
+        color = gl.get('color', [1.0, 1.0, 1.0])
+        intensity = gl.get('intensity', 1.0)
+        light_type = gl.get('type', 'point')
+
+        # Get world-space position from the node transform
+        pos = world_transform[:3, 3].tolist()
+
+        # For directional lights, use direction (negative Z in local space transformed)
+        if light_type == 'directional':
+            direction = (world_transform[:3, :3] @ np.array([0, 0, -1], dtype=np.float64)).tolist()
+            # Place directional light far away in that direction
+            pos = [d * 10.0 for d in direction]
+
+        # Scale intensity for our attenuation model (GLTF uses candela, we use simpler model)
+        scaled_intensity = min(intensity / 100.0, 5.0) if intensity > 10 else intensity
+
+        lights.append({
+            "pos": pos,
+            "color": list(color),
+            "intensity": scaled_intensity,
+        })
+    return lights
+
+
 def load_gltf(filepath):
-    """Load a GLTF/GLB file and return vertices, uvs, normals."""
+    """Load a GLTF/GLB file. Returns (verts, uvs, norms, materials, texture_image, lights, mesh_ranges, texture_images)."""
     if not GLTF_AVAILABLE:
         print("GLTF loading requires pygltflib: pip install pygltflib")
-        return None, None, None
+        return None, None, None, None, None, None, None, None
 
     try:
         gltf = pygltflib.GLTF2().load(filepath)
 
+        # Collect all binary data from buffers
+        buffer_data_cache = {}
+        for buf_idx, buf in enumerate(gltf.buffers):
+            if hasattr(gltf, '_glb_data') and gltf._glb_data and buf_idx == 0:
+                buffer_data_cache[buf_idx] = gltf._glb_data
+            elif buf.uri:
+                buffer_path = Path(filepath).parent / buf.uri
+                with open(buffer_path, 'rb') as f:
+                    buffer_data_cache[buf_idx] = f.read()
+
+        # Helper to get binary data for a buffer view
+        def get_binary(accessor_idx):
+            acc = gltf.accessors[accessor_idx]
+            bv = gltf.bufferViews[acc.bufferView]
+            return buffer_data_cache.get(bv.buffer, b'')
+
+        # Walk the scene node graph to collect per-mesh world transforms and light nodes
+        mesh_transforms = {}  # {mesh_index: [world_matrix, ...]}
+        light_nodes = []      # [(light_index, world_matrix), ...]
+        scene_idx = gltf.scene if gltf.scene is not None else 0
+        if hasattr(gltf, 'scenes') and gltf.scenes and scene_idx < len(gltf.scenes):
+            scene = gltf.scenes[scene_idx]
+            if scene.nodes:
+                for root_node_idx in scene.nodes:
+                    _gltf_collect_nodes(gltf, root_node_idx, np.eye(4, dtype=np.float64),
+                                        mesh_transforms, light_nodes)
+
+        # Extract materials
+        materials = _gltf_extract_materials(gltf)
+
+        # Extract lights
+        scene_lights = _gltf_extract_lights(gltf, light_nodes)
+
+        # Load ALL unique textures referenced by materials
+        texture_images = {}  # {texture_idx: PIL Image}
+        for mat in materials:
+            tex_idx = mat['base_color_texture']
+            if tex_idx is not None and tex_idx not in texture_images:
+                img = _gltf_load_texture_image(gltf, tex_idx,
+                                               buffer_data_cache, filepath)
+                if img is not None:
+                    texture_images[tex_idx] = img
+        # Keep first texture as fallback for backwards compat
+        texture_image = next(iter(texture_images.values()), None)
+
         all_vertices = []
         all_uvs = []
         all_normals = []
+        mesh_ranges = []  # [(start_vertex, count, material_index), ...]
 
-        for mesh in gltf.meshes:
+        for mesh_idx, mesh in enumerate(gltf.meshes):
+            # Get world transforms for this mesh (may be instanced at multiple nodes)
+            transforms = mesh_transforms.get(mesh_idx, [np.eye(4, dtype=np.float64)])
+
             for primitive in mesh.primitives:
-                # Get accessor indices
-                pos_accessor_idx = primitive.attributes.POSITION
-                if pos_accessor_idx is None:
+                # Track material index for this primitive
+                prim_mat_idx = primitive.material if primitive.material is not None else -1
+                pos_idx = primitive.attributes.POSITION
+                if pos_idx is None:
                     continue
 
-                # Read position data
-                pos_accessor = gltf.accessors[pos_accessor_idx]
-                pos_buffer_view = gltf.bufferViews[pos_accessor.bufferView]
-                pos_buffer = gltf.buffers[pos_buffer_view.buffer]
+                binary = get_binary(pos_idx)
+                pos_data = _gltf_read_accessor(gltf, pos_idx, binary, 3)
+                count = len(pos_data)
 
-                # Get binary data
-                if hasattr(gltf, '_glb_data') and gltf._glb_data:
-                    data = gltf._glb_data
-                else:
-                    buffer_path = Path(filepath).parent / pos_buffer.uri
-                    with open(buffer_path, 'rb') as f:
-                        data = f.read()
-
-                # Extract positions
-                offset = pos_buffer_view.byteOffset + (pos_accessor.byteOffset or 0)
-                count = pos_accessor.count
-                for i in range(count):
-                    idx = offset + i * 12  # 3 floats * 4 bytes
-                    x, y, z = struct.unpack('fff', data[idx:idx+12])
-                    all_vertices.extend([x, y, z])
-
-                # Read UVs if available
+                # Read UVs
+                uv_data = None
                 if hasattr(primitive.attributes, 'TEXCOORD_0') and primitive.attributes.TEXCOORD_0 is not None:
-                    uv_accessor = gltf.accessors[primitive.attributes.TEXCOORD_0]
-                    uv_buffer_view = gltf.bufferViews[uv_accessor.bufferView]
-                    uv_offset = uv_buffer_view.byteOffset + (uv_accessor.byteOffset or 0)
-                    for i in range(uv_accessor.count):
-                        idx = uv_offset + i * 8  # 2 floats * 4 bytes
-                        u, v = struct.unpack('ff', data[idx:idx+8])
-                        all_uvs.extend([u, v])
-                else:
-                    all_uvs.extend([0.0, 0.0] * count)
+                    uv_binary = get_binary(primitive.attributes.TEXCOORD_0)
+                    uv_data = _gltf_read_accessor(gltf, primitive.attributes.TEXCOORD_0, uv_binary, 2)
 
-                # Read normals if available
+                # Read normals
+                norm_data = None
                 if hasattr(primitive.attributes, 'NORMAL') and primitive.attributes.NORMAL is not None:
-                    norm_accessor = gltf.accessors[primitive.attributes.NORMAL]
-                    norm_buffer_view = gltf.bufferViews[norm_accessor.bufferView]
-                    norm_offset = norm_buffer_view.byteOffset + (norm_accessor.byteOffset or 0)
-                    for i in range(norm_accessor.count):
-                        idx = norm_offset + i * 12
-                        nx, ny, nz = struct.unpack('fff', data[idx:idx+12])
-                        all_normals.extend([nx, ny, nz])
+                    norm_binary = get_binary(primitive.attributes.NORMAL)
+                    norm_data = _gltf_read_accessor(gltf, primitive.attributes.NORMAL, norm_binary, 3)
+
+                # Expand indexed geometry
+                if primitive.indices is not None:
+                    idx_binary = get_binary(primitive.indices)
+                    indices = _gltf_read_indices(gltf, primitive.indices, idx_binary)
                 else:
-                    all_normals.extend([0.0, 1.0, 0.0] * count)
+                    indices = list(range(count))
+
+                # For each node instance of this mesh, emit transformed vertices
+                for world_mat in transforms:
+                    range_start = len(all_vertices) // 3
+                    # Precompute normal transform matrix
+                    m3 = world_mat[:3, :3]
+                    try:
+                        normal_mat = np.linalg.inv(m3).T
+                    except np.linalg.LinAlgError:
+                        normal_mat = m3  # fallback if singular
+
+                    for tri_idx in indices:
+                        if tri_idx >= count:
+                            continue
+                        # Transform position by world matrix
+                        px, py, pz = pos_data[tri_idx]
+                        v4 = world_mat @ np.array([px, py, pz, 1.0], dtype=np.float64)
+                        all_vertices.extend([float(v4[0]), float(v4[1]), float(v4[2])])
+
+                        # UV
+                        if uv_data and tri_idx < len(uv_data):
+                            all_uvs.extend(uv_data[tri_idx])
+                        else:
+                            all_uvs.extend([0.0, 0.0])
+
+                        # Transform normal
+                        if norm_data and tri_idx < len(norm_data):
+                            nx, ny, nz = norm_data[tri_idx]
+                            n3 = normal_mat @ np.array([nx, ny, nz], dtype=np.float64)
+                            length = np.linalg.norm(n3)
+                            if length > 1e-6:
+                                n3 /= length
+                            all_normals.extend([float(n3[0]), float(n3[1]), float(n3[2])])
+                        else:
+                            all_normals.extend([0.0, 1.0, 0.0])
+
+                    range_count = len(all_vertices) // 3 - range_start
+                    if range_count > 0:
+                        mesh_ranges.append((range_start, range_count, prim_mat_idx))
 
         if not all_vertices:
-            return None, None, None
+            return None, None, None, None, None, None, None, None
 
+        print(f"GLTF loaded: {len(all_vertices) // 3} vertices, "
+              f"{len(materials)} materials, {len(scene_lights)} lights, "
+              f"{len(mesh_ranges)} mesh ranges, {len(texture_images)} textures")
         return (np.array(all_vertices, dtype=np.float32),
                 np.array(all_uvs, dtype=np.float32),
-                np.array(all_normals, dtype=np.float32))
+                np.array(all_normals, dtype=np.float32),
+                materials,
+                texture_image,
+                scene_lights,
+                mesh_ranges,
+                texture_images)
 
     except Exception as e:
         print(f"Error loading GLTF: {e}")
         import traceback
         traceback.print_exc()
-        return None, None, None
+        return None, None, None, None, None, None, None, None
 
 
 # --- SHADER LIBRARY ---
@@ -657,7 +1122,7 @@ SHADERS = {
         "category": "Sketch",
         "description": "Hand-drawn pencil sketch effect like Blender's Grease Pencil",
         "uniforms": {
-            "line_thickness": {"min": 0.5, "max": 8.0, "default": 1.5, "step": 0.1},
+            "line_thickness": {"min": 0.1, "max": 8.0, "default": 1.5, "step": 0.1},
             "line_darkness": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.05},
             "fill_opacity": {"min": 0.0, "max": 1.0, "default": 0.8, "step": 0.05},
             "edge_threshold": {"min": 0.01, "max": 0.5, "default": 0.1, "step": 0.01},
@@ -802,8 +1267,8 @@ SHADERS = {
         "category": "Toon",
         "description": "Classic cel-shaded cartoon look with customizable shading",
         "uniforms": {
-            "color_bands": {"min": 2.0, "max": 12.0, "default": 4.0, "step": 1.0},
-            "edge_thickness": {"min": 0.5, "max": 8.0, "default": 1.5, "step": 0.1},
+            "color_bands": {"min": 2.0, "max": 24.0, "default": 4.0, "step": 1.0},
+            "edge_thickness": {"min": 0.1, "max": 8.0, "default": 1.5, "step": 0.1},
             "edge_threshold": {"min": 0.01, "max": 0.5, "default": 0.15, "step": 0.01},
             "edge_softness": {"min": 0.0, "max": 0.2, "default": 0.02, "step": 0.01},
             "saturation_boost": {"min": 0.0, "max": 3.0, "default": 1.2, "step": 0.05},
@@ -952,12 +1417,12 @@ SHADERS = {
         "description": "Classic comic book style with halftone dots and bold outlines",
         "uniforms": {
             "dot_size": {"min": 2.0, "max": 30.0, "default": 8.0, "step": 1.0},
-            "dot_angle": {"min": 0.0, "max": 1.57, "default": 0.785, "step": 0.05},
+            "dot_angle": {"min": 0.0, "max": 1.57, "default": 0.785, "step": 0.02},
             "dot_softness": {"min": 0.01, "max": 0.2, "default": 0.05, "step": 0.01},
-            "outline_thickness": {"min": 0.5, "max": 8.0, "default": 2.0, "step": 0.25},
+            "outline_thickness": {"min": 0.1, "max": 8.0, "default": 2.0, "step": 0.1},
             "outline_threshold": {"min": 0.05, "max": 0.5, "default": 0.15, "step": 0.01},
             "outline_softness": {"min": 0.0, "max": 0.3, "default": 0.1, "step": 0.01},
-            "color_levels": {"min": 2.0, "max": 16.0, "default": 4.0, "step": 1.0},
+            "color_levels": {"min": 2.0, "max": 32.0, "default": 4.0, "step": 1.0},
             "color_strength": {"min": 0.0, "max": 1.0, "default": 0.8, "step": 0.05},
             "saturation": {"min": 0.0, "max": 2.0, "default": 1.2, "step": 0.05},
             "ink_density": {"min": 0.0, "max": 1.0, "default": 0.9, "step": 0.05},
@@ -1087,7 +1552,7 @@ SHADERS = {
         "description": "Edge detection with customizable appearance",
         "uniforms": {
             "edge_intensity": {"min": 0.5, "max": 10.0, "default": 2.0, "step": 0.1},
-            "threshold": {"min": 0.0, "max": 0.5, "default": 0.1, "step": 0.01},
+            "threshold": {"min": 0.0, "max": 1.0, "default": 0.1, "step": 0.01},
             "softness": {"min": 0.0, "max": 0.3, "default": 0.05, "step": 0.01},
             "invert": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 1.0},
             "color_edges": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 1.0},
@@ -1323,7 +1788,7 @@ SHADERS = {
             "highlight_g": {"min": 0.0, "max": 1.0, "default": 0.9, "step": 0.02},
             "highlight_b": {"min": 0.0, "max": 1.0, "default": 0.7, "step": 0.02},
             "contrast": {"min": 0.5, "max": 2.0, "default": 1.1, "step": 0.02},
-            "grain": {"min": 0.0, "max": 0.3, "default": 0.05, "step": 0.01},
+            "grain": {"min": 0.0, "max": 1.0, "default": 0.05, "step": 0.01},
             "vignette": {"min": 0.0, "max": 1.0, "default": 0.3, "step": 0.02},
         
             "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
@@ -1509,7 +1974,7 @@ SHADERS = {
         "category": "Effects",
         "description": "Lens distortion with RGB channel separation",
         "uniforms": {
-            "strength": {"min": 0.0, "max": 0.05, "default": 0.005, "step": 0.001},
+            "strength": {"min": 0.0, "max": 0.2, "default": 0.005, "step": 0.001},
             "radial_power": {"min": 0.5, "max": 3.0, "default": 1.0, "step": 0.1},
             "center_x": {"min": 0.0, "max": 1.0, "default": 0.5, "step": 0.02},
             "center_y": {"min": 0.0, "max": 1.0, "default": 0.5, "step": 0.02},
@@ -1626,7 +2091,7 @@ SHADERS = {
         "description": "Digital glitch distortion effect",
         "uniforms": {
             "block_size": {"min": 5.0, "max": 100.0, "default": 30.0, "step": 1.0},
-            "intensity": {"min": 0.0, "max": 0.2, "default": 0.03, "step": 0.005},
+            "intensity": {"min": 0.0, "max": 0.5, "default": 0.03, "step": 0.005},
             "color_shift": {"min": 0.0, "max": 0.1, "default": 0.02, "step": 0.002},
             "scan_lines": {"min": 0.0, "max": 1.0, "default": 0.3, "step": 0.05},
             "noise": {"min": 0.0, "max": 1.0, "default": 0.1, "step": 0.02},
@@ -1737,8 +2202,8 @@ SHADERS = {
         "description": "Image sharpening with unsharp mask",
         "uniforms": {
             "amount": {"min": 0.0, "max": 5.0, "default": 1.0, "step": 0.1},
-            "radius": {"min": 0.5, "max": 5.0, "default": 1.0, "step": 0.1},
-            "threshold": {"min": 0.0, "max": 0.5, "default": 0.0, "step": 0.01},
+            "radius": {"min": 0.1, "max": 5.0, "default": 1.0, "step": 0.1},
+            "threshold": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01},
         
             "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
             "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
@@ -1823,10 +2288,10 @@ SHADERS = {
         "category": "Effects",
         "description": "Gaussian blur with adjustable radius",
         "uniforms": {
-            "radius": {"min": 0.0, "max": 20.0, "default": 5.0, "step": 0.5},
+            "radius": {"min": 0.0, "max": 20.0, "default": 5.0, "step": 0.2},
             "quality": {"min": 1.0, "max": 3.0, "default": 2.0, "step": 1.0},
             "directional": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 1.0},
-            "direction_angle": {"min": 0.0, "max": 6.28, "default": 0.0, "step": 0.1},
+            "direction_angle": {"min": 0.0, "max": 6.28, "default": 0.0, "step": 0.02},
         
             "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
             "contrast": {"min": 0.0, "max": 3.0, "default": 1.0, "step": 0.01},
@@ -1916,7 +2381,7 @@ SHADERS = {
         "category": "Artistic",
         "description": "Oil painting effect using Kuwahara filter",
         "uniforms": {
-            "radius": {"min": 1.0, "max": 8.0, "default": 4.0, "step": 0.5},
+            "radius": {"min": 0.1, "max": 8.0, "default": 4.0, "step": 0.1},
             "sharpness": {"min": 1.0, "max": 20.0, "default": 8.0, "step": 0.5},
             "color_levels": {"min": 2.0, "max": 32.0, "default": 8.0, "step": 1.0},
             "saturation": {"min": 0.5, "max": 2.0, "default": 1.2, "step": 0.05},
@@ -2375,7 +2840,7 @@ SHADERS = {
             "age_amount": {"min": 0.0, "max": 1.0, "default": 0.5, "step": 0.02},
             "fade_amount": {"min": 0.0, "max": 0.5, "default": 0.15, "step": 0.02},
             "warmth": {"min": 0.0, "max": 1.0, "default": 0.4, "step": 0.02},
-            "grain": {"min": 0.0, "max": 0.3, "default": 0.1, "step": 0.01},
+            "grain": {"min": 0.0, "max": 1.0, "default": 0.1, "step": 0.01},
             "vignette": {"min": 0.0, "max": 1.5, "default": 0.6, "step": 0.02},
             "scratches": {"min": 0.0, "max": 1.0, "default": 0.3, "step": 0.02},
             "flicker": {"min": 0.0, "max": 0.2, "default": 0.05, "step": 0.01},
@@ -2565,7 +3030,7 @@ SHADERS = {
         "category": "Stylized",
         "description": "Reduce colors to create poster-like effect",
         "uniforms": {
-            "levels": {"min": 2.0, "max": 16.0, "default": 4.0, "step": 1.0},
+            "levels": {"min": 2.0, "max": 32.0, "default": 4.0, "step": 1.0},
             "saturation": {"min": 0.0, "max": 2.0, "default": 1.2, "step": 0.05},
             "outline": {"min": 0.0, "max": 1.0, "default": 0.5, "step": 0.02},
             "outline_thickness": {"min": 0.5, "max": 4.0, "default": 1.5, "step": 0.1},
@@ -3791,7 +4256,7 @@ SHADERS = {
         "uniforms": {
             "focus_point": {"min": 0.0, "max": 1.0, "default": 0.5, "step": 0.02},
             "focus_range": {"min": 0.0, "max": 1.0, "default": 0.2, "step": 0.02},
-            "blur_amount": {"min": 0.0, "max": 20.0, "default": 5.0, "step": 0.5},
+            "blur_amount": {"min": 0.0, "max": 20.0, "default": 5.0, "step": 0.2},
             "blur_quality": {"min": 1.0, "max": 3.0, "default": 2.0, "step": 1.0},
             "bokeh_shape": {"min": 0.0, "max": 1.0, "default": 0.5, "step": 0.1},
             "brightness": {"min": -0.5, "max": 0.5, "default": 0.0, "step": 0.02},
@@ -4057,11 +4522,13 @@ SHADERS = {
             void main() {
                 vec2 curved_uv = curve(v_uv);
 
-                // Check bounds
-                if(curved_uv.x < 0.0 || curved_uv.x > 1.0 || curved_uv.y < 0.0 || curved_uv.y > 1.0) {
-                    f_color = vec4(0.0, 0.0, 0.0, 1.0);
-                    return;
-                }
+                // Smooth edge fade instead of hard black cutoff
+                float edge_w = 0.01;
+                float edge_mask = smoothstep(0.0, edge_w, curved_uv.x)
+                                * smoothstep(0.0, edge_w, 1.0 - curved_uv.x)
+                                * smoothstep(0.0, edge_w, curved_uv.y)
+                                * smoothstep(0.0, edge_w, 1.0 - curved_uv.y);
+                curved_uv = clamp(curved_uv, vec2(0.0), vec2(1.0));
 
                 vec2 tex_size = vec2(textureSize(u_texture, 0));
                 vec2 pixel = 1.0 / tex_size;
@@ -4106,6 +4573,9 @@ SHADERS = {
                 vig = pow(vig, vignette * 0.5 + 0.1);
                 color *= vig;
 
+                // Apply CRT edge fade
+                color *= edge_mask;
+
                 f_color = vec4(clamp(color, 0.0, 1.0), 1.0);
             
     // --- Post-processing adjustments ---
@@ -4133,7 +4603,7 @@ SHADERS = {
         "category": "Effects",
         "description": "Directional motion blur effect",
         "uniforms": {
-            "blur_amount": {"min": 0.0, "max": 50.0, "default": 10.0, "step": 1.0},
+            "blur_amount": {"min": 0.0, "max": 50.0, "default": 10.0, "step": 0.5},
             "blur_angle": {"min": 0.0, "max": 6.28, "default": 0.0, "step": 0.1},
             "blur_samples": {"min": 3.0, "max": 20.0, "default": 10.0, "step": 1.0},
             "center_focus": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.05},
@@ -8187,7 +8657,7 @@ SHADERS = {
         "description": "Painterly smoothing filter that preserves edges.",
         "category": "Artistic",
         "uniforms": {
-            "radius": {"type": "float", "default": 4.0, "min": 1.0, "max": 10.0, "step": 1.0},
+            "radius": {"type": "float", "default": 4.0, "min": 0.5, "max": 10.0, "step": 0.5},
             "sharpness": {"type": "float", "default": 8.0, "min": 1.0, "max": 20.0, "step": 1.0},
         
             "brightness": {"min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01},
@@ -8291,10 +8761,10 @@ SHADERS = {
         "description": "Pen and ink hatching illustration style.",
         "category": "Artistic",
         "uniforms": {
-            "density": {"type": "float", "default": 10.0, "min": 5.0, "max": 30.0, "step": 1.0},
+            "density": {"type": "float", "default": 10.0, "min": 1.0, "max": 30.0, "step": 1.0},
             "thickness": {"type": "float", "default": 0.5, "min": 0.1, "max": 1.0, "step": 0.05},
-            "angle1": {"type": "float", "default": 0.785, "min": 0.0, "max": 3.14, "step": 0.1},
-            "angle2": {"type": "float", "default": 2.356, "min": 0.0, "max": 3.14, "step": 0.1},
+            "angle1": {"type": "float", "default": 0.785, "min": 0.0, "max": 3.14, "step": 0.05},
+            "angle2": {"type": "float", "default": 2.356, "min": 0.0, "max": 3.14, "step": 0.05},
             "levels": {"type": "float", "default": 4.0, "min": 2.0, "max": 8.0, "step": 1.0},
             "ink_color_r": {"type": "float", "default": 0.1, "min": 0.0, "max": 1.0, "step": 0.05},
             "ink_color_g": {"type": "float", "default": 0.05, "min": 0.0, "max": 1.0, "step": 0.05},
@@ -9863,6 +10333,10 @@ AI_MODELS = {
     }
 }
 
+# Merge user-defined custom models into the built-in set
+if CUSTOM_AI_MODELS:
+    AI_MODELS.update(CUSTOM_AI_MODELS)
+
 # Effect keywords mapping for local AI interpretation
 EFFECT_KEYWORDS = {
     # Edge/Outline effects
@@ -10169,13 +10643,136 @@ QUICK_AI_PROMPTS = {
     "Noir": "Black and white film noir with high contrast",
 }
 
+# ============================================================
+# Procedural Texture Definitions
+# ============================================================
+PROCEDURAL_TEXTURES = {
+    "Noise": {
+        "description": "Perlin-style value noise with octave layering",
+        "params": {
+            "scale": {"min": 1.0, "max": 64.0, "default": 8.0, "step": 0.5},
+            "octaves": {"min": 1.0, "max": 8.0, "default": 4.0, "step": 1.0},
+            "persistence": {"min": 0.1, "max": 1.0, "default": 0.5, "step": 0.05},
+            "seed": {"min": 0.0, "max": 999.0, "default": 42.0, "step": 1.0},
+            "color1_r": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.02},
+            "color1_g": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.02},
+            "color1_b": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.02},
+            "color2_r": {"min": 0.0, "max": 1.0, "default": 1.0, "step": 0.02},
+            "color2_g": {"min": 0.0, "max": 1.0, "default": 1.0, "step": 0.02},
+            "color2_b": {"min": 0.0, "max": 1.0, "default": 1.0, "step": 0.02},
+        },
+    },
+    "Checkerboard": {
+        "description": "Two-color checkerboard pattern",
+        "params": {
+            "scale": {"min": 1.0, "max": 32.0, "default": 8.0, "step": 1.0},
+            "color1_r": {"min": 0.0, "max": 1.0, "default": 0.2, "step": 0.02},
+            "color1_g": {"min": 0.0, "max": 1.0, "default": 0.2, "step": 0.02},
+            "color1_b": {"min": 0.0, "max": 1.0, "default": 0.2, "step": 0.02},
+            "color2_r": {"min": 0.0, "max": 1.0, "default": 0.9, "step": 0.02},
+            "color2_g": {"min": 0.0, "max": 1.0, "default": 0.9, "step": 0.02},
+            "color2_b": {"min": 0.0, "max": 1.0, "default": 0.9, "step": 0.02},
+        },
+    },
+    "Gradient": {
+        "description": "Linear or radial color gradient",
+        "params": {
+            "direction": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 1.0},
+            "angle": {"min": 0.0, "max": 6.28, "default": 0.0, "step": 0.05},
+            "color1_r": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.02},
+            "color1_g": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.02},
+            "color1_b": {"min": 0.0, "max": 1.0, "default": 0.5, "step": 0.02},
+            "color2_r": {"min": 0.0, "max": 1.0, "default": 1.0, "step": 0.02},
+            "color2_g": {"min": 0.0, "max": 1.0, "default": 0.5, "step": 0.02},
+            "color2_b": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.02},
+        },
+    },
+    "Brick": {
+        "description": "Brick wall pattern with mortar lines",
+        "params": {
+            "brick_width": {"min": 2.0, "max": 32.0, "default": 8.0, "step": 1.0},
+            "brick_height": {"min": 1.0, "max": 16.0, "default": 4.0, "step": 1.0},
+            "mortar_size": {"min": 0.01, "max": 0.3, "default": 0.08, "step": 0.01},
+            "offset_ratio": {"min": 0.0, "max": 1.0, "default": 0.5, "step": 0.05},
+            "color1_r": {"min": 0.0, "max": 1.0, "default": 0.7, "step": 0.02},
+            "color1_g": {"min": 0.0, "max": 1.0, "default": 0.25, "step": 0.02},
+            "color1_b": {"min": 0.0, "max": 1.0, "default": 0.15, "step": 0.02},
+            "color2_r": {"min": 0.0, "max": 1.0, "default": 0.85, "step": 0.02},
+            "color2_g": {"min": 0.0, "max": 1.0, "default": 0.85, "step": 0.02},
+            "color2_b": {"min": 0.0, "max": 1.0, "default": 0.8, "step": 0.02},
+        },
+    },
+    "Marble": {
+        "description": "Marble stone texture with veins",
+        "params": {
+            "scale": {"min": 1.0, "max": 32.0, "default": 5.0, "step": 0.5},
+            "turbulence": {"min": 0.0, "max": 10.0, "default": 5.0, "step": 0.2},
+            "octaves": {"min": 1.0, "max": 8.0, "default": 4.0, "step": 1.0},
+            "color1_r": {"min": 0.0, "max": 1.0, "default": 0.9, "step": 0.02},
+            "color1_g": {"min": 0.0, "max": 1.0, "default": 0.9, "step": 0.02},
+            "color1_b": {"min": 0.0, "max": 1.0, "default": 0.9, "step": 0.02},
+            "color2_r": {"min": 0.0, "max": 1.0, "default": 0.2, "step": 0.02},
+            "color2_g": {"min": 0.0, "max": 1.0, "default": 0.2, "step": 0.02},
+            "color2_b": {"min": 0.0, "max": 1.0, "default": 0.3, "step": 0.02},
+        },
+    },
+    "Wood Grain": {
+        "description": "Concentric wood ring pattern with noise perturbation",
+        "params": {
+            "scale": {"min": 1.0, "max": 32.0, "default": 6.0, "step": 0.5},
+            "rings": {"min": 1.0, "max": 30.0, "default": 12.0, "step": 1.0},
+            "turbulence": {"min": 0.0, "max": 5.0, "default": 1.5, "step": 0.1},
+            "color1_r": {"min": 0.0, "max": 1.0, "default": 0.4, "step": 0.02},
+            "color1_g": {"min": 0.0, "max": 1.0, "default": 0.25, "step": 0.02},
+            "color1_b": {"min": 0.0, "max": 1.0, "default": 0.1, "step": 0.02},
+            "color2_r": {"min": 0.0, "max": 1.0, "default": 0.7, "step": 0.02},
+            "color2_g": {"min": 0.0, "max": 1.0, "default": 0.45, "step": 0.02},
+            "color2_b": {"min": 0.0, "max": 1.0, "default": 0.2, "step": 0.02},
+        },
+    },
+    "Voronoi": {
+        "description": "Voronoi cell pattern with randomized point scatter",
+        "params": {
+            "cell_count": {"min": 4.0, "max": 64.0, "default": 16.0, "step": 1.0},
+            "seed": {"min": 0.0, "max": 999.0, "default": 42.0, "step": 1.0},
+            "jitter": {"min": 0.0, "max": 1.0, "default": 1.0, "step": 0.05},
+            "color1_r": {"min": 0.0, "max": 1.0, "default": 0.1, "step": 0.02},
+            "color1_g": {"min": 0.0, "max": 1.0, "default": 0.1, "step": 0.02},
+            "color1_b": {"min": 0.0, "max": 1.0, "default": 0.1, "step": 0.02},
+            "color2_r": {"min": 0.0, "max": 1.0, "default": 0.9, "step": 0.02},
+            "color2_g": {"min": 0.0, "max": 1.0, "default": 0.7, "step": 0.02},
+            "color2_b": {"min": 0.0, "max": 1.0, "default": 0.4, "step": 0.02},
+        },
+    },
+    "Stripes": {
+        "description": "Parallel stripe pattern at any angle",
+        "params": {
+            "scale": {"min": 1.0, "max": 64.0, "default": 10.0, "step": 1.0},
+            "angle": {"min": 0.0, "max": 3.14, "default": 0.0, "step": 0.05},
+            "sharpness": {"min": 0.0, "max": 1.0, "default": 0.5, "step": 0.02},
+            "color1_r": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.02},
+            "color1_g": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.02},
+            "color1_b": {"min": 0.0, "max": 1.0, "default": 0.0, "step": 0.02},
+            "color2_r": {"min": 0.0, "max": 1.0, "default": 1.0, "step": 0.02},
+            "color2_g": {"min": 0.0, "max": 1.0, "default": 1.0, "step": 0.02},
+            "color2_b": {"min": 0.0, "max": 1.0, "default": 1.0, "step": 0.02},
+        },
+    },
+}
+
 VERTEX_SHADER = """
 #version 330 core
 in vec2 in_vert;
 in vec2 in_uv;
 out vec2 v_uv;
+uniform float u_zoom_2d;
+uniform vec2 u_pan_2d;
+uniform vec2 u_aspect;
 void main() {
-    gl_Position = vec4(in_vert, 0.0, 1.0);
+    float z = (u_zoom_2d > 0.0) ? u_zoom_2d : 1.0;
+    vec2 aspect = (u_aspect.x > 0.0 && u_aspect.y > 0.0) ? u_aspect : vec2(1.0, 1.0);
+    vec2 pos = in_vert * aspect * z + u_pan_2d;
+    gl_Position = vec4(pos, 0.0, 1.0);
     v_uv = in_uv;
 }
 """
@@ -10190,6 +10787,131 @@ void main() {
     f_color = texture(u_texture, v_uv);
 }
 """
+
+
+# Compositor fragment shader for blending layers with blend modes, masks, clipping
+COMPOSITOR_FRAG = """
+#version 330 core
+uniform sampler2D u_base;
+uniform sampler2D u_layer;
+uniform sampler2D u_mask;
+uniform float u_opacity;
+uniform int u_blend_mode;
+uniform int u_has_mask;
+uniform int u_clipping;
+in vec2 v_uv;
+out vec4 fragColor;
+
+vec3 rgb2hsl(vec3 c) {
+    float mx = max(c.r, max(c.g, c.b));
+    float mn = min(c.r, min(c.g, c.b));
+    float l = (mx + mn) * 0.5;
+    if (mx == mn) return vec3(0.0, 0.0, l);
+    float d = mx - mn;
+    float s = l > 0.5 ? d / (2.0 - mx - mn) : d / (mx + mn);
+    float h;
+    if (mx == c.r) h = (c.g - c.b) / d + (c.g < c.b ? 6.0 : 0.0);
+    else if (mx == c.g) h = (c.b - c.r) / d + 2.0;
+    else h = (c.r - c.g) / d + 4.0;
+    return vec3(h / 6.0, s, l);
+}
+
+float hue2rgb(float p, float q, float t) {
+    if (t < 0.0) t += 1.0;
+    if (t > 1.0) t -= 1.0;
+    if (t < 1.0/6.0) return p + (q - p) * 6.0 * t;
+    if (t < 1.0/2.0) return q;
+    if (t < 2.0/3.0) return p + (q - p) * (2.0/3.0 - t) * 6.0;
+    return p;
+}
+
+vec3 hsl2rgb(vec3 hsl) {
+    if (hsl.y == 0.0) return vec3(hsl.z);
+    float q = hsl.z < 0.5 ? hsl.z * (1.0 + hsl.y) : hsl.z + hsl.y - hsl.z * hsl.y;
+    float p = 2.0 * hsl.z - q;
+    return vec3(hue2rgb(p, q, hsl.x + 1.0/3.0), hue2rgb(p, q, hsl.x), hue2rgb(p, q, hsl.x - 1.0/3.0));
+}
+
+void main() {
+    vec4 base = texture(u_base, v_uv);
+    vec4 layer = texture(u_layer, v_uv);
+    vec3 b = base.rgb;
+    vec3 l = layer.rgb;
+
+    // Apply layer mask (grayscale: white=visible, black=hidden)
+    float mask_val = 1.0;
+    if (u_has_mask == 1) {
+        mask_val = texture(u_mask, v_uv).r;
+    }
+
+    // Clipping mask: clip to base alpha
+    if (u_clipping == 1) {
+        mask_val *= base.a;
+    }
+
+    vec3 result;
+    // 0=Normal 1=Multiply 2=Screen 3=Overlay 4=Add 5=Subtract
+    // 6=ColorDodge 7=ColorBurn 8=SoftLight 9=HardLight 10=Difference
+    // 11=Exclusion 12=Hue 13=Saturation 14=Color 15=Luminosity
+    if (u_blend_mode == 0) result = l;
+    else if (u_blend_mode == 1) result = b * l;
+    else if (u_blend_mode == 2) result = 1.0 - (1.0 - b) * (1.0 - l);
+    else if (u_blend_mode == 3) {
+        result = vec3(
+            b.r < 0.5 ? 2.0*b.r*l.r : 1.0 - 2.0*(1.0-b.r)*(1.0-l.r),
+            b.g < 0.5 ? 2.0*b.g*l.g : 1.0 - 2.0*(1.0-b.g)*(1.0-l.g),
+            b.b < 0.5 ? 2.0*b.b*l.b : 1.0 - 2.0*(1.0-b.b)*(1.0-l.b));
+    }
+    else if (u_blend_mode == 4) result = clamp(b + l, 0.0, 1.0);
+    else if (u_blend_mode == 5) result = clamp(b - l, 0.0, 1.0);
+    else if (u_blend_mode == 6) result = vec3(  // Color Dodge
+        l.r >= 1.0 ? 1.0 : min(1.0, b.r / (1.0 - l.r + 0.001)),
+        l.g >= 1.0 ? 1.0 : min(1.0, b.g / (1.0 - l.g + 0.001)),
+        l.b >= 1.0 ? 1.0 : min(1.0, b.b / (1.0 - l.b + 0.001)));
+    else if (u_blend_mode == 7) result = vec3(  // Color Burn
+        l.r <= 0.0 ? 0.0 : max(0.0, 1.0 - (1.0 - b.r) / (l.r + 0.001)),
+        l.g <= 0.0 ? 0.0 : max(0.0, 1.0 - (1.0 - b.g) / (l.g + 0.001)),
+        l.b <= 0.0 ? 0.0 : max(0.0, 1.0 - (1.0 - b.b) / (l.b + 0.001)));
+    else if (u_blend_mode == 8) {  // Soft Light
+        result = vec3(
+            l.r < 0.5 ? b.r - (1.0-2.0*l.r)*b.r*(1.0-b.r) : b.r + (2.0*l.r-1.0)*(sqrt(b.r)-b.r),
+            l.g < 0.5 ? b.g - (1.0-2.0*l.g)*b.g*(1.0-b.g) : b.g + (2.0*l.g-1.0)*(sqrt(b.g)-b.g),
+            l.b < 0.5 ? b.b - (1.0-2.0*l.b)*b.b*(1.0-b.b) : b.b + (2.0*l.b-1.0)*(sqrt(b.b)-b.b));
+    }
+    else if (u_blend_mode == 9) {  // Hard Light
+        result = vec3(
+            l.r < 0.5 ? 2.0*b.r*l.r : 1.0 - 2.0*(1.0-b.r)*(1.0-l.r),
+            l.g < 0.5 ? 2.0*b.g*l.g : 1.0 - 2.0*(1.0-b.g)*(1.0-l.g),
+            l.b < 0.5 ? 2.0*b.b*l.b : 1.0 - 2.0*(1.0-b.b)*(1.0-l.b));
+    }
+    else if (u_blend_mode == 10) result = abs(b - l);  // Difference
+    else if (u_blend_mode == 11) result = b + l - 2.0*b*l;  // Exclusion
+    else if (u_blend_mode == 12) {  // Hue
+        vec3 bHSL = rgb2hsl(b); vec3 lHSL = rgb2hsl(l);
+        result = hsl2rgb(vec3(lHSL.x, bHSL.y, bHSL.z));
+    }
+    else if (u_blend_mode == 13) {  // Saturation
+        vec3 bHSL = rgb2hsl(b); vec3 lHSL = rgb2hsl(l);
+        result = hsl2rgb(vec3(bHSL.x, lHSL.y, bHSL.z));
+    }
+    else if (u_blend_mode == 14) {  // Color
+        vec3 bHSL = rgb2hsl(b); vec3 lHSL = rgb2hsl(l);
+        result = hsl2rgb(vec3(lHSL.x, lHSL.y, bHSL.z));
+    }
+    else if (u_blend_mode == 15) {  // Luminosity
+        vec3 bHSL = rgb2hsl(b); vec3 lHSL = rgb2hsl(l);
+        result = hsl2rgb(vec3(bHSL.x, bHSL.y, lHSL.z));
+    }
+    else result = l;
+
+    float a = layer.a * u_opacity * mask_val;
+    fragColor = vec4(mix(b, result, a), max(base.a, a));
+}
+"""
+
+BLEND_MODES = ['normal', 'multiply', 'screen', 'overlay', 'add', 'subtract',
+               'color dodge', 'color burn', 'soft light', 'hard light',
+               'difference', 'exclusion', 'hue', 'saturation', 'color', 'luminosity']
 
 # 3D Vertex shader with model-view-projection
 VERTEX_SHADER_3D = """
@@ -10294,6 +11016,34 @@ void main() {
 }
 """,
 }
+
+# UV coordinate pick shader — outputs UV coords as color for GPU-based surface picking
+UV_PICK_FRAG_SHADER = """
+#version 330 core
+in vec2 v_uv;
+in vec3 v_normal;
+in vec3 v_position;
+uniform int u_material_idx;
+out vec4 f_color;
+void main() {
+    // R=u, G=v, B=material_index+1 (0=background/miss), A=1
+    f_color = vec4(v_uv.x, v_uv.y, float(u_material_idx + 1) / 255.0, 1.0);
+}
+"""
+
+# Composite shader for 3D post-processing — applies alpha mask so shaders only affect the model
+COMPOSITE_3D_FRAG_SHADER = """
+#version 330 core
+uniform sampler2D u_texture;      // Post-processed result
+uniform sampler2D u_alpha_mask;   // Original 3D render (alpha = 1 for model, 0 for bg)
+in vec2 v_uv;
+out vec4 f_color;
+void main() {
+    vec4 processed = texture(u_texture, v_uv);
+    float mask_alpha = texture(u_alpha_mask, v_uv).a;
+    f_color = vec4(processed.rgb, mask_alpha);
+}
+"""
 
 
 def load_obj(filepath):
@@ -10461,6 +11211,8 @@ class ShaderCanvas(QOpenGLWidget):
     # Signals
     colorPicked = QtCore.pyqtSignal(int, int, int, int)  # RGBA color picked
     textureLoaded = QtCore.pyqtSignal(str)  # Emitted when a texture is loaded (path)
+    animFrameChanged = QtCore.pyqtSignal()  # Emitted when animation frame changes
+    cameraChanged = QtCore.pyqtSignal()  # Emitted on orbit/pan/zoom so UI stays synced
 
     def __init__(self):
         super().__init__()
@@ -10476,6 +11228,7 @@ class ShaderCanvas(QOpenGLWidget):
         self.current_preset = "Original"
         self.params = {}
         self.image_path = None
+        self.bg_color = (0.12, 0.12, 0.12, 1.0)  # Viewport background color (RGBA 0-1)
 
         # 3D mode properties
         self.mode_3d = False
@@ -10487,8 +11240,17 @@ class ShaderCanvas(QOpenGLWidget):
         self.auto_rotate = False
         self.rotation_speed = 1.0
         self.zoom = 2.5
+        self._initial_zoom = 2.5   # auto-fit zoom at model load (for dynamic max)
         self.pan_x = 0.0
         self.pan_y = 0.0
+        self.fov = 45.0              # Field of view (degrees)
+        self.near_plane = 0.1        # Near clipping plane
+        self.far_plane = 100.0       # Far clipping plane
+
+        # 2D viewport zoom/pan
+        self.zoom_2d = 1.0       # 2D zoom level (1.0 = fit to window)
+        self.pan_2d_x = 0.0      # 2D pan X offset (NDC units)
+        self.pan_2d_y = 0.0      # 2D pan Y offset (NDC units)
 
         # Multiple 3D objects support
         self.objects_3d = []  # List of {"vao": ..., "vbo": ..., "count": ..., "transform": ...}
@@ -10508,14 +11270,15 @@ class ShaderCanvas(QOpenGLWidget):
         self.color_picker_mode = False
 
         # Multiple light sources for 3D
-        self.lights = [
-            {"pos": [2.0, 2.0, 2.0], "color": [1.0, 1.0, 1.0], "intensity": 1.0},  # Key light
-            {"pos": [-2.0, 1.0, 1.0], "color": [0.3, 0.5, 1.0], "intensity": 0.5},  # Fill light
-            {"pos": [0.0, -1.0, 2.0], "color": [1.0, 0.8, 0.6], "intensity": 0.3},  # Rim light
-        ]
+        self._model_extent = 2.0  # Default model size assumption
+        self.lights = self._get_default_lights()
         self.ambient_intensity = 0.2
         self.specular_power = 32.0
         self.specular_intensity = 0.5
+        self._gltf_materials = []  # PBR material dicts from GLTF
+        self._gltf_texture_image = None  # PIL Image from GLTF
+        self._mesh_ranges = []  # [(start_vertex, count, material_index), ...]
+        self._material_texture_ids = {}  # {material_index: GL texture ID}
 
         # Undo/Redo system
         self.undo_stack = []
@@ -10544,6 +11307,43 @@ class ShaderCanvas(QOpenGLWidget):
         self.fbo_texture = None
         self.fbo_size = (0, 0)
 
+        # 3D post-processing FBOs (render 3D scene, then apply 2D shader layers)
+        self._3d_pp_fbo = None
+        self._3d_pp_texture = None
+        self._3d_pp_depth = None
+        self._3d_pp_size = (0, 0)
+        # Second FBO for ping-pong multi-pass layer rendering
+        self._3d_pp_fbo2 = None
+        self._3d_pp_texture2 = None
+        self._3d_pp_size2 = (0, 0)
+        # Alpha mask texture for 3D compositing (shader only affects model, not bg)
+        self._3d_alpha_texture = None
+        self._3d_alpha_tex_size = (0, 0)
+        self._3d_composite_program = None
+
+        # 3D Paint-on-Model
+        self._3d_paint_texture = None           # numpy RGBA (H,W,4) uint8 — UV-space paint layer
+        self._3d_paint_tex_size = (1024, 1024)   # Default paint resolution
+        self._3d_original_tex_data = {}          # {mat_idx: numpy RGBA} — originals for compositing
+        self._3d_original_base_colors = {}       # {mat_idx: [r,g,b,a]} — saved before overwrite
+
+        # UV pick buffer FBO
+        self._3d_uv_fbo = None
+        self._3d_uv_texture = None
+        self._3d_uv_depth = None
+        self._3d_uv_fbo_size = (0, 0)
+        self._3d_uv_program = None
+
+        # 3D paint stroke tracking
+        self._3d_stroke_last_uv = None
+        self._3d_stroke_active = False
+        self._3d_stroke_mat_idx = -1
+
+        # 3D paint undo/redo
+        self._3d_paint_undo_stack = []
+        self._3d_paint_redo_stack = []
+        self._max_3d_paint_undo = 20
+
         # LUT and overlays
         self.current_lut = None
         self.overlay_texture = None
@@ -10564,6 +11364,25 @@ class ShaderCanvas(QOpenGLWidget):
         self._original_image_data = None # numpy array of original image (for reset)
         self._original_image_path = None # path to original image (for reset)
 
+        # Layer system (compositable layers with blend modes)
+        self._layers = []  # List of layer dicts (bottom-to-top render order)
+        # Each: {'name','shader','params','visible','locked','opacity','blend_mode'}
+
+        # Animation timeline
+        self._anim_frames = []       # List of {'layers': [...], 'duration': int_ms}
+        self._anim_current_frame = 0
+        self._anim_fps = 12
+        self._anim_playing = False
+        self._anim_timer = QtCore.QTimer()
+        self._anim_timer.timeout.connect(self._advance_anim_frame)
+        self._anim_loop = True
+        self._onion_skin = False
+        self._onion_skin_count = 2
+
+        # Compositor shader (for blending layers)
+        self._compositor_program = None
+        self._layer_texture = None      # secondary GL texture for compositing
+
         # AOV render passes for 3D mode
         self.render_pass_mode = "combined"  # "combined", "normals", "depth", "diffuse", "ao"
         self.aov_programs = {}  # Compiled AOV shader programs keyed by pass name
@@ -10571,6 +11390,113 @@ class ShaderCanvas(QOpenGLWidget):
         # Passthrough shader for placeholder (no effects on checkerboard background)
         self._has_image = False  # True when a real image is loaded
         self._passthrough_program = None  # Compiled passthrough shader
+
+        # Paint tool state
+        self._active_tool = "none"          # "none"|"pencil"|"eraser"|"line"|"rect"|"ellipse"|"fill"|"wand"
+        self._paint_color = (255, 0, 0, 255)  # RGBA
+        self._brush_size = 7                # Diameter in pixels (1 = 1px, 2 = 2px, etc.)
+        self._brush_opacity = 255           # 0-255
+        self._fill_mode = "filled"          # "filled" or "outline" for shapes
+        self._tolerance = 32                # For flood fill and magic wand (0-255)
+
+        self._paint_surface = None          # numpy (H,W,4) RGBA uint8 — drawing buffer
+        self._stroke_start = None           # (x,y) image coords on mouse press
+        self._stroke_current = None         # (x,y) updated on mouse move
+        self._stroke_preview = None         # snapshot before shape drag (live preview)
+        self._selection_mask = None         # numpy bool (H,W), None = all selected
+
+        self._paint_undo_stack = []
+        self._paint_redo_stack = []
+        self._max_paint_undo = 20
+
+        # Extended paint tool state
+        self._brush_hardness = 1.0          # 0.0 (soft) to 1.0 (hard)
+        self._brush_tip = "round"           # "round", "square", "diamond"
+        self._brush_spacing = 0.25          # fraction of brush diameter
+        self._brush_scatter = 0.0           # jitter amount 0-1
+        self._gradient_type = "linear"      # "linear", "radial", "angular"
+        self._gradient_color2 = (0, 0, 255, 255)  # second gradient color
+        self._gradient_start = None         # start point for gradient drag
+        self._gradient_end = None           # end point for gradient drag
+        self._clone_source = None           # (x, y) image coords of clone source
+        self._clone_offset = None           # (dx, dy) offset from source to target
+        self._blur_strength = 5             # kernel radius for blur brush
+        self._sharpen_mode = False          # True = sharpen, False = blur
+        self._dodge_burn_mode = "dodge"     # "dodge" or "burn"
+        self._dodge_burn_exposure = 0.5     # 0-1
+        self._text_content = "Text"         # text to render
+        self._text_font_size = 24           # points
+        self._text_font_family = "Arial"    # font family name
+        self._text_position = None          # (x, y) position for text placement
+        self._polygon_sides = 6            # for polygon tool
+        self._polygon_star = False          # star mode
+        self._polygon_inner_ratio = 0.5     # inner radius ratio for stars
+        self._symmetry_enabled = False      # mirror painting
+        self._symmetry_axis = "vertical"    # "vertical", "horizontal", "both", "radial"
+        self._symmetry_segments = 6         # number of segments for radial symmetry
+        self._stabilizer_enabled = False    # stroke smoothing
+        self._stabilizer_points = []        # rolling average buffer
+        self._stabilizer_strength = 5       # number of points to average
+        self._select_mode = "rect"          # "rect", "ellipse", "lasso", "poly_lasso"
+        self._lasso_points = []             # for lasso/polygon lasso
+        self._select_feather = 0            # feather radius
+        self._transform_mode = "move"       # "move", "scale", "rotate", "flip_h", "flip_v"
+        self._transform_region = None       # numpy array of selected area
+        self._transform_origin = None       # anchor coords
+        self._transform_offset = (0, 0)     # current drag offset
+        self._transform_bounds = None       # (x0, y0, x1, y1)
+        self._smudge_color = None           # float32 RGBA for smudge tool
+        self._crop_rect = None              # (x0, y0, x1, y1) for crop tool
+        self._hue_jitter = 0.0              # color dynamics
+        self._sat_jitter = 0.0
+        self._val_jitter = 0.0
+        self._airbrush_timer = None         # QTimer for airbrush accumulation
+        self._reference_image = None        # numpy array for reference layer
+        self._reference_opacity = 0.5       # reference layer opacity
+        self._stamp_pattern = "none"        # "none", "dots", "hatches", "crosshatch"
+
+        # Pressure sensitivity (tablet/stylus)
+        self._tablet_pressure = 1.0         # 0.0-1.0, current pressure from tablet
+        self._pressure_affects_size = True   # scale brush size by pressure
+        self._pressure_affects_opacity = True  # scale brush opacity by pressure
+        self._pressure_min_size = 0.1       # minimum size multiplier at zero pressure
+
+        # Color palette / swatches
+        self._color_swatches = [
+            (0, 0, 0, 255), (255, 255, 255, 255), (255, 0, 0, 255),
+            (0, 255, 0, 255), (0, 0, 255, 255), (255, 255, 0, 255),
+            (255, 0, 255, 255), (0, 255, 255, 255), (128, 128, 128, 255),
+            (128, 0, 0, 255), (0, 128, 0, 255), (0, 0, 128, 255),
+            (255, 128, 0, 255), (128, 0, 255, 255), (0, 128, 128, 255),
+            (255, 200, 200, 255), (200, 255, 200, 255), (200, 200, 255, 255),
+            (64, 64, 64, 255), (192, 192, 192, 255),
+        ]
+
+        # Layer mask painting mode
+        self._painting_mask = False         # True = painting on layer mask instead of image
+
+        # Liquify brush
+        self._liquify_radius = 30           # radius for liquify tool
+        self._liquify_strength = 0.5        # 0-1 strength
+        self._liquify_mode = "push"         # "push", "expand", "contract", "twirl_cw", "twirl_ccw"
+
+        # History snapshots
+        self._history_snapshots = []        # list of (name, image_data) tuples
+        self._max_snapshots = 20
+
+        # Perspective / isometric guides
+        self._guide_type = "none"           # "none", "1pt", "2pt", "3pt", "isometric", "grid"
+        self._guide_opacity = 0.3           # guide line opacity
+
+        # Custom brush tips (loaded from images)
+        self._custom_brush_image = None     # numpy (H,W) float32 alpha mask
+        self._custom_brush_name = None
+
+        # Pen tool state (for vector layers)
+        self._pen_points = []               # list of (x, y) points for current path
+        self._pen_active_layer = None       # index of vector layer being drawn on
+        self._pen_stroke_width = 2.0
+        self._pen_closed = False
 
         # Enable mouse tracking
         self.setMouseTracking(True)
@@ -10582,6 +11508,8 @@ class ShaderCanvas(QOpenGLWidget):
         fmt.setProfile(QtGui.QSurfaceFormat.OpenGLContextProfile.CoreProfile)
         fmt.setSwapBehavior(QtGui.QSurfaceFormat.SwapBehavior.DoubleBuffer)
         self.setFormat(fmt)
+        # Prevent old frame content from persisting during resize
+        self.setUpdateBehavior(QOpenGLWidget.UpdateBehavior.NoPartialUpdate)
 
     def initializeGL(self):
         print("Initializing OpenGL...")
@@ -10607,6 +11535,15 @@ class ShaderCanvas(QOpenGLWidget):
 
         # Create placeholder texture (checkerboard)
         self._create_placeholder_texture()
+
+        # Create 1x1 white fallback texture for untextured materials
+        self._white_texture = GL.glGenTextures(1)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, self._white_texture)
+        white_pixel = np.array([255, 255, 255, 255], dtype=np.uint8)
+        GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA, 1, 1, 0,
+                        GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, white_pixel)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_NEAREST)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_NEAREST)
 
         # Initialize shader params
         self._init_params()
@@ -10688,6 +11625,760 @@ class ShaderCanvas(QOpenGLWidget):
         GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
         self.fbo_size = (width, height)
         print(f"FBO created: {width}x{height}")
+
+    def _ensure_3d_pp_fbo(self, width, height):
+        """Create or resize the 3D post-processing FBO (color + depth)."""
+        if self._3d_pp_fbo is not None and self._3d_pp_size == (width, height):
+            return  # Already correct size
+
+        # Delete old
+        if self._3d_pp_fbo is not None:
+            GL.glDeleteFramebuffers(1, [self._3d_pp_fbo])
+            GL.glDeleteTextures([self._3d_pp_texture])
+            GL.glDeleteRenderbuffers(1, [self._3d_pp_depth])
+
+        self._3d_pp_fbo = GL.glGenFramebuffers(1)
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, self._3d_pp_fbo)
+
+        # Color texture
+        self._3d_pp_texture = GL.glGenTextures(1)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, self._3d_pp_texture)
+        GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA8, width, height, 0,
+                        GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, None)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_CLAMP_TO_EDGE)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_CLAMP_TO_EDGE)
+        GL.glFramebufferTexture2D(GL.GL_FRAMEBUFFER, GL.GL_COLOR_ATTACHMENT0,
+                                  GL.GL_TEXTURE_2D, self._3d_pp_texture, 0)
+
+        # Depth renderbuffer (required for 3D depth testing)
+        self._3d_pp_depth = GL.glGenRenderbuffers(1)
+        GL.glBindRenderbuffer(GL.GL_RENDERBUFFER, self._3d_pp_depth)
+        GL.glRenderbufferStorage(GL.GL_RENDERBUFFER, GL.GL_DEPTH_COMPONENT24, width, height)
+        GL.glFramebufferRenderbuffer(GL.GL_FRAMEBUFFER, GL.GL_DEPTH_ATTACHMENT,
+                                     GL.GL_RENDERBUFFER, self._3d_pp_depth)
+
+        if GL.glCheckFramebufferStatus(GL.GL_FRAMEBUFFER) != GL.GL_FRAMEBUFFER_COMPLETE:
+            print("3D post-processing FBO creation failed!")
+            GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
+            GL.glDeleteFramebuffers(1, [self._3d_pp_fbo])
+            GL.glDeleteTextures([self._3d_pp_texture])
+            GL.glDeleteRenderbuffers(1, [self._3d_pp_depth])
+            self._3d_pp_fbo = None
+            self._3d_pp_texture = None
+            self._3d_pp_depth = None
+            return
+
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
+        self._3d_pp_size = (width, height)
+
+    def _ensure_3d_pp_fbo2(self, width, height):
+        """Create/resize second FBO for ping-pong multi-layer post-processing (color only)."""
+        if self._3d_pp_fbo2 is not None and self._3d_pp_size2 == (width, height):
+            return
+        if self._3d_pp_fbo2 is not None:
+            GL.glDeleteFramebuffers(1, [self._3d_pp_fbo2])
+            GL.glDeleteTextures([self._3d_pp_texture2])
+        self._3d_pp_fbo2 = GL.glGenFramebuffers(1)
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, self._3d_pp_fbo2)
+        self._3d_pp_texture2 = GL.glGenTextures(1)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, self._3d_pp_texture2)
+        GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA8, width, height, 0,
+                        GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, None)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_CLAMP_TO_EDGE)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_CLAMP_TO_EDGE)
+        GL.glFramebufferTexture2D(GL.GL_FRAMEBUFFER, GL.GL_COLOR_ATTACHMENT0,
+                                  GL.GL_TEXTURE_2D, self._3d_pp_texture2, 0)
+        if GL.glCheckFramebufferStatus(GL.GL_FRAMEBUFFER) != GL.GL_FRAMEBUFFER_COMPLETE:
+            GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
+            GL.glDeleteFramebuffers(1, [self._3d_pp_fbo2])
+            GL.glDeleteTextures([self._3d_pp_texture2])
+            self._3d_pp_fbo2 = None
+            self._3d_pp_texture2 = None
+            return
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
+        self._3d_pp_size2 = (width, height)
+
+    def _ensure_3d_alpha_texture(self, width, height):
+        """Create/resize the alpha mask texture for 3D compositing."""
+        if self._3d_alpha_texture is not None and self._3d_alpha_tex_size == (width, height):
+            return  # Already correct size
+        self.makeCurrent()
+        if self._3d_alpha_texture is not None:
+            GL.glDeleteTextures([self._3d_alpha_texture])
+        self._3d_alpha_texture = GL.glGenTextures(1)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, self._3d_alpha_texture)
+        GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA8, width, height, 0,
+                        GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, None)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_CLAMP_TO_EDGE)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_CLAMP_TO_EDGE)
+        self._3d_alpha_tex_size = (width, height)
+
+    def _compile_3d_composite_shader(self):
+        """Compile the composite shader for alpha-masked 3D post-processing."""
+        if self._3d_composite_program is not None:
+            return self._3d_composite_program
+        vert = GL.glCreateShader(GL.GL_VERTEX_SHADER)
+        GL.glShaderSource(vert, VERTEX_SHADER)
+        GL.glCompileShader(vert)
+        if not GL.glGetShaderiv(vert, GL.GL_COMPILE_STATUS):
+            print(f"[3D Composite] Vertex error: {GL.glGetShaderInfoLog(vert).decode()}")
+            return None
+        frag = GL.glCreateShader(GL.GL_FRAGMENT_SHADER)
+        GL.glShaderSource(frag, COMPOSITE_3D_FRAG_SHADER)
+        GL.glCompileShader(frag)
+        if not GL.glGetShaderiv(frag, GL.GL_COMPILE_STATUS):
+            print(f"[3D Composite] Fragment error: {GL.glGetShaderInfoLog(frag).decode()}")
+            return None
+        self._3d_composite_program = GL.glCreateProgram()
+        GL.glAttachShader(self._3d_composite_program, vert)
+        GL.glAttachShader(self._3d_composite_program, frag)
+        GL.glLinkProgram(self._3d_composite_program)
+        if not GL.glGetProgramiv(self._3d_composite_program, GL.GL_LINK_STATUS):
+            print(f"[3D Composite] Link error: {GL.glGetProgramInfoLog(self._3d_composite_program).decode()}")
+            self._3d_composite_program = None
+            return None
+        GL.glDeleteShader(vert)
+        GL.glDeleteShader(frag)
+        return self._3d_composite_program
+
+    # --- 3D Paint-on-Model: UV Pick Infrastructure ---
+
+    def _compile_uv_pick_shader(self):
+        """Compile the UV coordinate pick shader for GPU-based surface lookup."""
+        if self._3d_uv_program is not None:
+            return self._3d_uv_program
+        vert_shader = GL.glCreateShader(GL.GL_VERTEX_SHADER)
+        GL.glShaderSource(vert_shader, VERTEX_SHADER_3D)
+        GL.glCompileShader(vert_shader)
+        if not GL.glGetShaderiv(vert_shader, GL.GL_COMPILE_STATUS):
+            print(f"[UV Pick] Vertex shader error: {GL.glGetShaderInfoLog(vert_shader).decode()}")
+            return None
+        frag_shader = GL.glCreateShader(GL.GL_FRAGMENT_SHADER)
+        GL.glShaderSource(frag_shader, UV_PICK_FRAG_SHADER)
+        GL.glCompileShader(frag_shader)
+        if not GL.glGetShaderiv(frag_shader, GL.GL_COMPILE_STATUS):
+            print(f"[UV Pick] Fragment shader error: {GL.glGetShaderInfoLog(frag_shader).decode()}")
+            return None
+        program = GL.glCreateProgram()
+        GL.glAttachShader(program, vert_shader)
+        GL.glAttachShader(program, frag_shader)
+        # Bind attribute locations to match VAO layout (position=0, uv=1, normal=2)
+        GL.glBindAttribLocation(program, 0, "in_vert")
+        GL.glBindAttribLocation(program, 1, "in_uv")
+        GL.glBindAttribLocation(program, 2, "in_normal")
+        GL.glLinkProgram(program)
+        if not GL.glGetProgramiv(program, GL.GL_LINK_STATUS):
+            print(f"[UV Pick] Link error: {GL.glGetProgramInfoLog(program).decode()}")
+            return None
+        GL.glDeleteShader(vert_shader)
+        GL.glDeleteShader(frag_shader)
+        self._3d_uv_program = program
+        return program
+
+    def _ensure_3d_uv_fbo(self, width, height):
+        """Create or resize the UV pick FBO (16-bit float color + depth)."""
+        if self._3d_uv_fbo is not None and self._3d_uv_fbo_size == (width, height):
+            return
+        # Delete old
+        if self._3d_uv_fbo is not None:
+            GL.glDeleteFramebuffers(1, [self._3d_uv_fbo])
+            GL.glDeleteTextures([self._3d_uv_texture])
+            GL.glDeleteRenderbuffers(1, [self._3d_uv_depth])
+
+        self._3d_uv_fbo = GL.glGenFramebuffers(1)
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, self._3d_uv_fbo)
+
+        # Color texture — RGBA32F for UV coordinates (full float precision)
+        self._3d_uv_texture = GL.glGenTextures(1)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, self._3d_uv_texture)
+        GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA32F, width, height, 0,
+                        GL.GL_RGBA, GL.GL_FLOAT, None)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_NEAREST)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_NEAREST)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_CLAMP_TO_EDGE)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_CLAMP_TO_EDGE)
+        GL.glFramebufferTexture2D(GL.GL_FRAMEBUFFER, GL.GL_COLOR_ATTACHMENT0,
+                                  GL.GL_TEXTURE_2D, self._3d_uv_texture, 0)
+
+        # Depth renderbuffer (for front-face-only picking)
+        self._3d_uv_depth = GL.glGenRenderbuffers(1)
+        GL.glBindRenderbuffer(GL.GL_RENDERBUFFER, self._3d_uv_depth)
+        GL.glRenderbufferStorage(GL.GL_RENDERBUFFER, GL.GL_DEPTH_COMPONENT24, width, height)
+        GL.glFramebufferRenderbuffer(GL.GL_FRAMEBUFFER, GL.GL_DEPTH_ATTACHMENT,
+                                     GL.GL_RENDERBUFFER, self._3d_uv_depth)
+
+        if GL.glCheckFramebufferStatus(GL.GL_FRAMEBUFFER) != GL.GL_FRAMEBUFFER_COMPLETE:
+            print("[UV Pick] FBO creation failed!")
+            GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
+            GL.glDeleteFramebuffers(1, [self._3d_uv_fbo])
+            GL.glDeleteTextures([self._3d_uv_texture])
+            GL.glDeleteRenderbuffers(1, [self._3d_uv_depth])
+            self._3d_uv_fbo = None
+            self._3d_uv_texture = None
+            self._3d_uv_depth = None
+            return
+
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
+        self._3d_uv_fbo_size = (width, height)
+
+    def _render_uv_buffer(self, w, h):
+        """Render 3D scene with UV pick shader to the UV FBO."""
+        program = self._compile_uv_pick_shader()
+        if program is None or self.vao_3d is None:
+            return
+        self._ensure_3d_uv_fbo(w, h)
+        if self._3d_uv_fbo is None:
+            return
+
+        qt_fbo = self.defaultFramebufferObject()
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, self._3d_uv_fbo)
+        GL.glViewport(0, 0, w, h)
+        GL.glClearColor(0.0, 0.0, 0.0, 0.0)
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
+
+        GL.glEnable(GL.GL_DEPTH_TEST)
+        GL.glEnable(GL.GL_CULL_FACE)
+        GL.glCullFace(GL.GL_BACK)
+        GL.glFrontFace(GL.GL_CCW)
+
+        GL.glUseProgram(program)
+        GL.glBindVertexArray(self.vao_3d)
+
+        # Set MVP matrices (same as _paint_3d_scene)
+        aspect = w / h if h > 0 else 1.0
+        model = self._make_rotation_matrix()
+        view = self._make_view_matrix()
+        projection = self._make_perspective_matrix(self.fov, aspect, self.near_plane, self.far_plane)
+
+        model_loc = GL.glGetUniformLocation(program, "u_model")
+        view_loc = GL.glGetUniformLocation(program, "u_view")
+        proj_loc = GL.glGetUniformLocation(program, "u_projection")
+        if model_loc >= 0:
+            GL.glUniformMatrix4fv(model_loc, 1, GL.GL_TRUE, model)
+        if view_loc >= 0:
+            GL.glUniformMatrix4fv(view_loc, 1, GL.GL_TRUE, view)
+        if proj_loc >= 0:
+            GL.glUniformMatrix4fv(proj_loc, 1, GL.GL_TRUE, projection)
+
+        mat_loc = GL.glGetUniformLocation(program, "u_material_idx")
+        # Render per-material draw calls to encode material index in blue channel
+        if self._mesh_ranges:
+            for start, count, mat_idx in self._mesh_ranges:
+                if mat_idx < 0:
+                    mat_idx = 0  # Fallback for unassigned materials
+                if mat_loc >= 0:
+                    GL.glUniform1i(mat_loc, mat_idx)
+                GL.glDrawArrays(GL.GL_TRIANGLES, start, count)
+        else:
+            # Single mesh, no material ranges
+            if mat_loc >= 0:
+                GL.glUniform1i(mat_loc, 0)
+            GL.glDrawArrays(GL.GL_TRIANGLES, 0, self.model_vertex_count)
+        GL.glDisable(GL.GL_CULL_FACE)
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, qt_fbo)
+
+    def _pick_uv_at(self, widget_pos):
+        """Read UV coords from the UV pick buffer at the given widget position.
+        Returns (u, v, material_index) tuple or None if cursor is over background."""
+        if self._3d_uv_fbo is None:
+            return None
+        ratio = self.devicePixelRatio()
+        x = int(widget_pos.x() * ratio)
+        y = int((self.height() - widget_pos.y()) * ratio)
+        x = max(0, min(self._3d_uv_fbo_size[0] - 1, x))
+        y = max(0, min(self._3d_uv_fbo_size[1] - 1, y))
+
+        qt_fbo = self.defaultFramebufferObject()
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, self._3d_uv_fbo)
+        pixel = GL.glReadPixels(x, y, 1, 1, GL.GL_RGBA, GL.GL_FLOAT)
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, qt_fbo)
+
+        if pixel is None:
+            return None
+        pixel = np.frombuffer(pixel, dtype=np.float32)
+        if len(pixel) < 4:
+            return None
+        # R=u, G=v, B=(material_idx+1)/255.0 where 0=background/miss
+        r, g, b = float(pixel[0]), float(pixel[1]), float(pixel[2])
+        mat_raw = int(round(b * 255.0))
+        if mat_raw == 0:
+            return None  # Cursor is over background, not model surface
+        u = r
+        v = g
+        mat_idx = mat_raw - 1  # Decode material index (shader encodes as idx+1)
+        return (u, v, mat_idx)
+
+    # --- 3D Paint-on-Model: Paint Texture Management ---
+
+    def _ensure_3d_paint_texture(self):
+        """Create the 3D paint texture (transparent) and ensure all materials have textures."""
+        if self._3d_paint_texture is not None:
+            return
+        w, h = self._3d_paint_tex_size
+        self._3d_paint_texture = np.zeros((h, w, 4), dtype=np.uint8)
+        # For materials without textures, create white GL textures so they can be painted on
+        self._ensure_all_materials_have_textures()
+        self._capture_original_textures()
+
+    def _ensure_all_materials_have_textures(self):
+        """Create GL textures for untextured materials so 3D painting works on all surfaces.
+
+        Fills each new texture with the material's base_color and sets base_color to (1,1,1,1)
+        so the shader's tex_color * base_color produces the correct original appearance,
+        and painting on the texture shows true paint colors.
+        """
+        if not self._mesh_ranges or not self._gltf_materials:
+            return
+        self.makeCurrent()
+        tw, th = self._3d_paint_tex_size
+        # Find all material indices used in the mesh
+        used_mats = set()
+        for start, count, mat_idx in self._mesh_ranges:
+            if mat_idx >= 0:
+                used_mats.add(mat_idx)
+        # Create textures for materials that don't have one
+        created = 0
+        for mat_idx in sorted(used_mats):
+            if mat_idx in self._material_texture_ids:
+                continue  # Already has a texture
+            # Get the material's base_color and bake it into the texture
+            mat = self._gltf_materials[mat_idx] if mat_idx < len(self._gltf_materials) else {}
+            bc = mat.get("base_color", [1.0, 1.0, 1.0, 1.0])
+            # Fill texture with base_color (convert float [0,1] to uint8 [0,255])
+            tex_data = np.zeros((th, tw, 4), dtype=np.uint8)
+            tex_data[:, :, 0] = int(min(bc[0], 1.0) * 255)
+            tex_data[:, :, 1] = int(min(bc[1], 1.0) * 255)
+            tex_data[:, :, 2] = int(min(bc[2], 1.0) * 255)
+            tex_data[:, :, 3] = 255
+            tex_id = GL.glGenTextures(1)
+            GL.glBindTexture(GL.GL_TEXTURE_2D, tex_id)
+            GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA, tw, th, 0,
+                            GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, tex_data)
+            GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_CLAMP_TO_EDGE)
+            GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_CLAMP_TO_EDGE)
+            GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
+            GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
+            self._material_texture_ids[mat_idx] = tex_id
+            # Set base_color to white so shader shows texture color directly
+            if mat_idx < len(self._gltf_materials):
+                self._3d_original_base_colors[mat_idx] = list(bc)
+                self._gltf_materials[mat_idx]["base_color"] = [1.0, 1.0, 1.0, 1.0]
+            created += 1
+        if created > 0:
+            print(f"[3D Paint] Created {created} base_color textures for untextured materials, total={len(self._material_texture_ids)}")
+
+    def _capture_original_textures(self):
+        """Read original model textures from GPU into numpy arrays for compositing."""
+        self.makeCurrent()
+        self._3d_original_tex_data.clear()
+        if self._material_texture_ids:
+            for mat_idx, gl_tex in self._material_texture_ids.items():
+                GL.glBindTexture(GL.GL_TEXTURE_2D, gl_tex)
+                w = GL.glGetTexLevelParameteriv(GL.GL_TEXTURE_2D, 0, GL.GL_TEXTURE_WIDTH)
+                h = GL.glGetTexLevelParameteriv(GL.GL_TEXTURE_2D, 0, GL.GL_TEXTURE_HEIGHT)
+                if w > 0 and h > 0:
+                    try:
+                        pixels = GL.glGetTexImage(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+                        data = np.frombuffer(pixels, dtype=np.uint8).reshape(h, w, 4).copy()
+                        self._3d_original_tex_data[mat_idx] = data
+                    except Exception as e:
+                        print(f"[3D Paint] Failed to capture texture for mat {mat_idx}: {e}")
+            print(f"[3D Paint] Captured {len(self._3d_original_tex_data)} original textures from {len(self._material_texture_ids)} materials")
+        elif self.texture_id is not None:
+            GL.glBindTexture(GL.GL_TEXTURE_2D, self.texture_id)
+            w = GL.glGetTexLevelParameteriv(GL.GL_TEXTURE_2D, 0, GL.GL_TEXTURE_WIDTH)
+            h = GL.glGetTexLevelParameteriv(GL.GL_TEXTURE_2D, 0, GL.GL_TEXTURE_HEIGHT)
+            if w > 0 and h > 0:
+                pixels = GL.glGetTexImage(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+                data = np.frombuffer(pixels, dtype=np.uint8).reshape(h, w, 4).copy()
+                self._3d_original_tex_data[0] = data
+        # If no texture exists (primitive with white texture), create a white original
+        if not self._3d_original_tex_data:
+            w, h = self._3d_paint_tex_size
+            white = np.full((h, w, 4), 255, dtype=np.uint8)
+            self._3d_original_tex_data[0] = white
+
+    # ---- Procedural texture generators ----
+
+    def _generate_procedural_texture(self, tex_type, params, width, height):
+        """Generate a procedural texture as numpy (H, W, 4) uint8 RGBA."""
+        generators = {
+            "Noise": self._gen_tex_noise,
+            "Checkerboard": self._gen_tex_checkerboard,
+            "Gradient": self._gen_tex_gradient,
+            "Brick": self._gen_tex_brick,
+            "Marble": self._gen_tex_marble,
+            "Wood Grain": self._gen_tex_wood,
+            "Voronoi": self._gen_tex_voronoi,
+            "Stripes": self._gen_tex_stripes,
+        }
+        gen = generators.get(tex_type)
+        if gen is None:
+            return np.full((height, width, 4), 128, dtype=np.uint8)
+        return gen(params, width, height)
+
+    def _noise_grid(self, rng, size):
+        """Create a smooth noise grid via bilinear interpolation."""
+        grid = rng.rand(size + 1, size + 1).astype(np.float32)
+        return grid
+
+    def _sample_noise(self, grid, xs, ys):
+        """Bilinear sample from a noise grid. xs, ys are float arrays."""
+        x0 = xs.astype(np.intp)
+        y0 = ys.astype(np.intp)
+        x1 = x0 + 1
+        y1 = y0 + 1
+        fx = (xs - x0).astype(np.float32)
+        fy = (ys - y0).astype(np.float32)
+        # Smooth interpolation
+        fx = fx * fx * (3.0 - 2.0 * fx)
+        fy = fy * fy * (3.0 - 2.0 * fy)
+        g = grid
+        v00 = g[y0 % g.shape[0], x0 % g.shape[1]]
+        v10 = g[y0 % g.shape[0], x1 % g.shape[1]]
+        v01 = g[y1 % g.shape[0], x0 % g.shape[1]]
+        v11 = g[y1 % g.shape[0], x1 % g.shape[1]]
+        return v00 * (1 - fx) * (1 - fy) + v10 * fx * (1 - fy) + v01 * (1 - fx) * fy + v11 * fx * fy
+
+    def _fbm(self, rng, width, height, scale, octaves, persistence):
+        """Fractional Brownian Motion noise field → (H, W) float32 in [0,1]."""
+        result = np.zeros((height, width), dtype=np.float32)
+        amplitude = 1.0
+        total_amp = 0.0
+        freq = scale
+        ys, xs = np.mgrid[0:height, 0:width].astype(np.float32)
+        for _ in range(int(octaves)):
+            grid_size = max(2, int(freq) + 2)
+            grid = self._noise_grid(rng, grid_size)
+            sx = xs / width * freq
+            sy = ys / height * freq
+            result += self._sample_noise(grid, sx, sy) * amplitude
+            total_amp += amplitude
+            amplitude *= persistence
+            freq *= 2.0
+        return result / total_amp
+
+    def _colors_from_params(self, p):
+        """Extract (c1, c2) as uint8 arrays from params dict."""
+        c1 = np.array([int(p.get("color1_r", 0) * 255),
+                        int(p.get("color1_g", 0) * 255),
+                        int(p.get("color1_b", 0) * 255), 255], dtype=np.uint8)
+        c2 = np.array([int(p.get("color2_r", 1) * 255),
+                        int(p.get("color2_g", 1) * 255),
+                        int(p.get("color2_b", 1) * 255), 255], dtype=np.uint8)
+        return c1, c2
+
+    def _gen_tex_noise(self, p, w, h):
+        rng = np.random.RandomState(int(p.get("seed", 42)))
+        noise = self._fbm(rng, w, h, p.get("scale", 8), p.get("octaves", 4), p.get("persistence", 0.5))
+        c1, c2 = self._colors_from_params(p)
+        out = np.zeros((h, w, 4), dtype=np.uint8)
+        t = noise[..., np.newaxis]
+        out[:] = (c1 * (1 - t) + c2 * t).astype(np.uint8)
+        return out
+
+    def _gen_tex_checkerboard(self, p, w, h):
+        scale = max(1, int(p.get("scale", 8)))
+        c1, c2 = self._colors_from_params(p)
+        ys, xs = np.mgrid[0:h, 0:w]
+        mask = ((xs * scale // w) + (ys * scale // h)) % 2 == 0
+        out = np.zeros((h, w, 4), dtype=np.uint8)
+        out[mask] = c1
+        out[~mask] = c2
+        return out
+
+    def _gen_tex_gradient(self, p, w, h):
+        direction = int(p.get("direction", 0))
+        angle = p.get("angle", 0.0)
+        c1, c2 = self._colors_from_params(p)
+        ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
+        xs /= max(1, w - 1)
+        ys /= max(1, h - 1)
+        if direction == 0:
+            t = xs * np.cos(angle) + ys * np.sin(angle)
+        else:
+            cx, cy = 0.5, 0.5
+            t = np.sqrt((xs - cx) ** 2 + (ys - cy) ** 2) * 2.0
+        t = np.clip(t, 0, 1)
+        out = np.zeros((h, w, 4), dtype=np.uint8)
+        out[:] = (c1 * (1 - t[..., np.newaxis]) + c2 * t[..., np.newaxis]).astype(np.uint8)
+        return out
+
+    def _gen_tex_brick(self, p, w, h):
+        bw = max(1, int(p.get("brick_width", 8)))
+        bh = max(1, int(p.get("brick_height", 4)))
+        mortar = p.get("mortar_size", 0.08)
+        offset_ratio = p.get("offset_ratio", 0.5)
+        c1, c2 = self._colors_from_params(p)
+        ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
+        # Normalize to brick grid
+        bx = xs / w * bw
+        by = ys / h * bh
+        row = np.floor(by).astype(np.intp)
+        # Stagger odd rows
+        bx_shifted = bx + (row % 2) * offset_ratio
+        fx = bx_shifted - np.floor(bx_shifted)
+        fy = by - np.floor(by)
+        half_mortar = mortar / 2.0
+        is_mortar = (fx < half_mortar) | (fx > 1.0 - half_mortar) | (fy < half_mortar) | (fy > 1.0 - half_mortar)
+        out = np.zeros((h, w, 4), dtype=np.uint8)
+        out[~is_mortar] = c1
+        out[is_mortar] = c2
+        return out
+
+    def _gen_tex_marble(self, p, w, h):
+        scale = p.get("scale", 5)
+        turb = p.get("turbulence", 5)
+        octaves = p.get("octaves", 4)
+        c1, c2 = self._colors_from_params(p)
+        rng = np.random.RandomState(0)
+        noise = self._fbm(rng, w, h, scale, octaves, 0.5)
+        xs = np.linspace(0, scale, w, dtype=np.float32)
+        pattern = np.sin(xs[np.newaxis, :] + noise * turb)
+        t = (pattern * 0.5 + 0.5).clip(0, 1)
+        out = np.zeros((h, w, 4), dtype=np.uint8)
+        out[:] = (c1 * (1 - t[..., np.newaxis]) + c2 * t[..., np.newaxis]).astype(np.uint8)
+        return out
+
+    def _gen_tex_wood(self, p, w, h):
+        scale = p.get("scale", 6)
+        rings = p.get("rings", 12)
+        turb = p.get("turbulence", 1.5)
+        c1, c2 = self._colors_from_params(p)
+        rng = np.random.RandomState(0)
+        noise = self._fbm(rng, w, h, scale, 4, 0.5)
+        ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
+        cx, cy = w / 2.0, h / 2.0
+        dist = np.sqrt((xs - cx) ** 2 + (ys - cy) ** 2) / max(w, h) * rings
+        pattern = np.sin(dist * 6.2832 + noise * turb)
+        t = (pattern * 0.5 + 0.5).clip(0, 1)
+        out = np.zeros((h, w, 4), dtype=np.uint8)
+        out[:] = (c1 * (1 - t[..., np.newaxis]) + c2 * t[..., np.newaxis]).astype(np.uint8)
+        return out
+
+    def _gen_tex_voronoi(self, p, w, h):
+        n = max(2, int(p.get("cell_count", 16)))
+        seed = int(p.get("seed", 42))
+        jitter = p.get("jitter", 1.0)
+        c1, c2 = self._colors_from_params(p)
+        rng = np.random.RandomState(seed)
+        # Grid-based voronoi for speed
+        grid_n = int(np.ceil(np.sqrt(n)))
+        points = []
+        for gy in range(grid_n):
+            for gx in range(grid_n):
+                px = (gx + 0.5 + (rng.rand() - 0.5) * jitter) / grid_n
+                py = (gy + 0.5 + (rng.rand() - 0.5) * jitter) / grid_n
+                points.append((px, py))
+        points = np.array(points[:n], dtype=np.float32)
+        ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
+        xs /= w
+        ys /= h
+        min_dist = np.full((h, w), 1e10, dtype=np.float32)
+        for px, py in points:
+            d = np.sqrt((xs - px) ** 2 + (ys - py) ** 2)
+            min_dist = np.minimum(min_dist, d)
+        max_d = min_dist.max()
+        if max_d > 0:
+            t = min_dist / max_d
+        else:
+            t = min_dist
+        t = t.clip(0, 1)
+        out = np.zeros((h, w, 4), dtype=np.uint8)
+        out[:] = (c1 * (1 - t[..., np.newaxis]) + c2 * t[..., np.newaxis]).astype(np.uint8)
+        return out
+
+    def _gen_tex_stripes(self, p, w, h):
+        scale = max(1, p.get("scale", 10))
+        angle = p.get("angle", 0.0)
+        sharpness = p.get("sharpness", 0.5)
+        c1, c2 = self._colors_from_params(p)
+        ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
+        xs /= w
+        ys /= h
+        d = xs * np.cos(angle) + ys * np.sin(angle)
+        wave = np.sin(d * scale * 6.2832)
+        if sharpness >= 0.99:
+            t = (wave > 0).astype(np.float32)
+        else:
+            edge = max(0.01, 1.0 - sharpness)
+            t = np.clip(wave / edge * 0.5 + 0.5, 0, 1)
+        out = np.zeros((h, w, 4), dtype=np.uint8)
+        out[:] = (c1 * (1 - t[..., np.newaxis]) + c2 * t[..., np.newaxis]).astype(np.uint8)
+        return out
+
+    def apply_texture_to_material(self, mat_idx, tex_data):
+        """Replace a material's GL texture with the given numpy RGBA array.
+
+        Preserves original texture data for later reset.
+        tex_data: numpy (H, W, 4) uint8, standard orientation (row 0 = top).
+        """
+        self.makeCurrent()
+        # Capture original if not yet saved
+        if mat_idx not in self._3d_original_tex_data:
+            tex_id = self._material_texture_ids.get(mat_idx)
+            if tex_id is not None:
+                GL.glBindTexture(GL.GL_TEXTURE_2D, tex_id)
+                tw = GL.glGetTexLevelParameteriv(GL.GL_TEXTURE_2D, 0, GL.GL_TEXTURE_WIDTH)
+                th = GL.glGetTexLevelParameteriv(GL.GL_TEXTURE_2D, 0, GL.GL_TEXTURE_HEIGHT)
+                if tw > 0 and th > 0:
+                    pixels = GL.glGetTexImage(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+                    self._3d_original_tex_data[mat_idx] = np.frombuffer(pixels, dtype=np.uint8).reshape(th, tw, 4).copy()
+        if mat_idx not in getattr(self, '_3d_original_base_colors', {}):
+            if not hasattr(self, '_3d_original_base_colors'):
+                self._3d_original_base_colors = {}
+            if self._gltf_materials and mat_idx < len(self._gltf_materials):
+                self._3d_original_base_colors[mat_idx] = list(self._gltf_materials[mat_idx].get("base_color", [1, 1, 1, 1]))
+
+        h, w = tex_data.shape[:2]
+        flipped = np.ascontiguousarray(np.flipud(tex_data))
+
+        tex_id = self._material_texture_ids.get(mat_idx)
+        if tex_id is not None:
+            GL.glDeleteTextures([tex_id])
+
+        new_tex = GL.glGenTextures(1)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, new_tex)
+        GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA8, w, h, 0,
+                        GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, flipped)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_REPEAT)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_REPEAT)
+        self._material_texture_ids[mat_idx] = new_tex
+
+        # Set base_color to white so texture color shows directly
+        if self._gltf_materials and mat_idx < len(self._gltf_materials):
+            self._gltf_materials[mat_idx]["base_color"] = [1.0, 1.0, 1.0, 1.0]
+
+        self.update()
+
+    def reset_material_texture(self, mat_idx):
+        """Restore a material's original texture."""
+        self.makeCurrent()
+        orig = self._3d_original_tex_data.get(mat_idx)
+        if orig is not None:
+            h, w = orig.shape[:2]
+            flipped = np.ascontiguousarray(np.flipud(orig))
+            tex_id = self._material_texture_ids.get(mat_idx)
+            if tex_id is not None:
+                GL.glDeleteTextures([tex_id])
+            new_tex = GL.glGenTextures(1)
+            GL.glBindTexture(GL.GL_TEXTURE_2D, new_tex)
+            GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA8, w, h, 0,
+                            GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, flipped)
+            GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
+            GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
+            GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_REPEAT)
+            GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_REPEAT)
+            self._material_texture_ids[mat_idx] = new_tex
+        # Restore original base_color
+        orig_bc = getattr(self, '_3d_original_base_colors', {}).get(mat_idx)
+        if orig_bc is not None and self._gltf_materials and mat_idx < len(self._gltf_materials):
+            self._gltf_materials[mat_idx]["base_color"] = list(orig_bc)
+        self.update()
+
+    def _apply_texture_transform(self, tex_data, tiling_u, tiling_v, offset_u, offset_v):
+        """Apply tiling and offset to texture data. Returns same-shape array."""
+        h, w = tex_data.shape[:2]
+        if tiling_u > 1.0 or tiling_v > 1.0:
+            tu = max(1, int(np.ceil(tiling_u)))
+            tv = max(1, int(np.ceil(tiling_v)))
+            tiled = np.tile(tex_data, (tv, tu, 1))
+            # Crop back to target resolution
+            new_h = int(h * tiling_v)
+            new_w = int(w * tiling_u)
+            tiled = tiled[:new_h, :new_w]
+            # Resize back to original dimensions
+            from PIL import Image
+            img = Image.fromarray(tiled)
+            img = img.resize((w, h), Image.LANCZOS)
+            tex_data = np.array(img)
+        if offset_u != 0.0:
+            shift_x = int(offset_u * w) % w
+            tex_data = np.roll(tex_data, shift_x, axis=1)
+        if offset_v != 0.0:
+            shift_y = int(offset_v * h) % h
+            tex_data = np.roll(tex_data, shift_y, axis=0)
+        return tex_data
+
+    def _composite_3d_paint(self, mat_idx=0):
+        """Alpha-blend 3D paint texture over original model texture."""
+        original = self._3d_original_tex_data.get(mat_idx)
+        if original is None:
+            return None
+        paint = self._3d_paint_texture
+        if paint is None:
+            return original.copy()
+
+        oh, ow = original.shape[:2]
+        ph, pw = paint.shape[:2]
+        if (ph, pw) != (oh, ow):
+            # Resize paint to match original texture dimensions
+            from PIL import Image as PILImage
+            paint_img = PILImage.fromarray(paint)
+            paint_resized = np.array(paint_img.resize((ow, oh), PILImage.LANCZOS))
+        else:
+            paint_resized = paint
+
+        alpha = paint_resized[:, :, 3:4].astype(np.float32) / 255.0
+        result = np.empty_like(original)
+        result[:, :, :3] = (paint_resized[:, :, :3].astype(np.float32) * alpha +
+                            original[:, :, :3].astype(np.float32) * (1.0 - alpha)).astype(np.uint8)
+        result[:, :, 3] = np.maximum(original[:, :, 3], paint_resized[:, :, 3])
+        return result
+
+    def _commit_3d_paint(self):
+        """Composite 3D paint over original and upload to GPU for display.
+        Only updates the material currently being painted on for performance."""
+        if self._3d_paint_texture is None:
+            return
+        self.makeCurrent()
+
+        target_mat = self._3d_stroke_mat_idx
+
+        if self._material_texture_ids:
+            if target_mat >= 0 and target_mat in self._material_texture_ids:
+                # Only update the material being painted on
+                gl_tex = self._material_texture_ids[target_mat]
+                composited = self._composite_3d_paint(target_mat)
+                if composited is not None:
+                    GL.glBindTexture(GL.GL_TEXTURE_2D, gl_tex)
+                    h, w = composited.shape[:2]
+                    GL.glTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, 0, w, h,
+                                       GL.GL_RGBA, GL.GL_UNSIGNED_BYTE,
+                                       np.ascontiguousarray(composited))
+            else:
+                # Fallback: update all materials
+                for mat_idx, gl_tex in self._material_texture_ids.items():
+                    composited = self._composite_3d_paint(mat_idx)
+                    if composited is None:
+                        continue
+                    GL.glBindTexture(GL.GL_TEXTURE_2D, gl_tex)
+                    h, w = composited.shape[:2]
+                    GL.glTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, 0, w, h,
+                                       GL.GL_RGBA, GL.GL_UNSIGNED_BYTE,
+                                       np.ascontiguousarray(composited))
+        elif self.texture_id is not None:
+            composited = self._composite_3d_paint(0)
+            if composited is not None:
+                GL.glBindTexture(GL.GL_TEXTURE_2D, self.texture_id)
+                h, w = composited.shape[:2]
+                GL.glTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, 0, w, h,
+                                   GL.GL_RGBA, GL.GL_UNSIGNED_BYTE,
+                                   np.ascontiguousarray(composited))
+        else:
+            # No existing texture — create one
+            composited = self._composite_3d_paint(0)
+            if composited is not None:
+                self._upload_texture(np.ascontiguousarray(composited))
+        self.update()
 
     def _compile_post_shader(self, shader_name):
         """Compile a shader for post-processing use."""
@@ -10802,8 +12493,8 @@ class ShaderCanvas(QOpenGLWidget):
             return
         self.makeCurrent()
         w, h = self.image_size
-        # Reload original image
-        self._upload_texture(np.ascontiguousarray(np.flipud(self._original_image_data)))
+        # Reload original image (_original_image_data is already bottom-up for OpenGL)
+        self._upload_texture(np.ascontiguousarray(self._original_image_data))
         # Replay each enabled entry
         for entry in self._bake_chain:
             if not entry.get('enabled', True):
@@ -10821,6 +12512,533 @@ class ShaderCanvas(QOpenGLWidget):
         self._init_params()
         self._compile_shader()
         self.update()
+
+    # --- LAYER SYSTEM ---
+
+    def _compile_compositor(self):
+        """Compile the compositor shader for layer blending (lazy init)."""
+        if self._compositor_program is not None:
+            return
+        try:
+            vert = GL.glCreateShader(GL.GL_VERTEX_SHADER)
+            GL.glShaderSource(vert, VERTEX_SHADER)
+            GL.glCompileShader(vert)
+            frag = GL.glCreateShader(GL.GL_FRAGMENT_SHADER)
+            GL.glShaderSource(frag, COMPOSITOR_FRAG)
+            GL.glCompileShader(frag)
+            prog = GL.glCreateProgram()
+            GL.glAttachShader(prog, vert)
+            GL.glAttachShader(prog, frag)
+            GL.glLinkProgram(prog)
+            GL.glDeleteShader(vert)
+            GL.glDeleteShader(frag)
+            if GL.glGetProgramiv(prog, GL.GL_LINK_STATUS) != GL.GL_TRUE:
+                log = GL.glGetProgramInfoLog(prog)
+                print(f"[Compositor] Link error: {log}")
+                GL.glDeleteProgram(prog)
+                return
+            self._compositor_program = prog
+            print("Compiled compositor shader")
+        except Exception as e:
+            print(f"[Compositor] Compile error: {e}")
+
+    def _upload_layer_texture(self, data):
+        """Upload numpy array as the secondary layer texture (for compositing)."""
+        if self._layer_texture is not None:
+            GL.glDeleteTextures([self._layer_texture])
+        self._layer_texture = GL.glGenTextures(1)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, self._layer_texture)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_CLAMP_TO_EDGE)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_CLAMP_TO_EDGE)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
+        h, w = data.shape[:2]
+        GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA, w, h, 0,
+                        GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, data)
+
+    def _upload_mask_texture(self, mask_data):
+        """Upload a grayscale mask (H,W) uint8 to a GL texture for compositor."""
+        if not hasattr(self, '_mask_texture') or self._mask_texture is None:
+            self._mask_texture = GL.glGenTextures(1)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, self._mask_texture)
+        h, w = mask_data.shape[:2]
+        # Convert grayscale to RGBA for GL compatibility
+        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+        rgba[:, :, 0] = mask_data
+        rgba[:, :, 1] = mask_data
+        rgba[:, :, 2] = mask_data
+        rgba[:, :, 3] = 255
+        data = np.ascontiguousarray(np.flipud(rgba))
+        GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA, w, h, 0,
+                        GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, data)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
+
+    def _composite_pass(self, base_data, layer_data, opacity, blend_mode, mask=None, clipping=False):
+        """Composite layer_data onto base_data using the compositor shader.
+        mask: optional (H,W) uint8 grayscale mask. clipping: clip to base alpha.
+        Returns composited numpy array (top-down) or None on failure."""
+        self._compile_compositor()
+        if self._compositor_program is None:
+            return None
+        self.makeCurrent()
+        h, w = base_data.shape[:2]
+
+        # Upload base as main texture (bottom-up for GL)
+        base_bu = np.ascontiguousarray(np.flipud(base_data))
+        self._upload_texture(base_bu)
+
+        # Upload layer as secondary texture (bottom-up for GL)
+        layer_bu = np.ascontiguousarray(np.flipud(layer_data))
+        self._upload_layer_texture(layer_bu)
+
+        # Upload mask texture if provided
+        has_mask = mask is not None
+        if has_mask:
+            self._upload_mask_texture(mask)
+
+        # Create FBO for compositing
+        fbo = GL.glGenFramebuffers(1)
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, fbo)
+        out_tex = GL.glGenTextures(1)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, out_tex)
+        GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA8, w, h, 0,
+                        GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, None)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
+        GL.glFramebufferTexture2D(GL.GL_FRAMEBUFFER, GL.GL_COLOR_ATTACHMENT0,
+                                  GL.GL_TEXTURE_2D, out_tex, 0)
+
+        if GL.glCheckFramebufferStatus(GL.GL_FRAMEBUFFER) != GL.GL_FRAMEBUFFER_COMPLETE:
+            GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
+            GL.glDeleteFramebuffers(1, [fbo])
+            GL.glDeleteTextures([out_tex])
+            return None
+
+        GL.glViewport(0, 0, w, h)
+        GL.glClearColor(0, 0, 0, 0)
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+
+        GL.glUseProgram(self._compositor_program)
+        GL.glBindVertexArray(self.vao)
+
+        # Bind base texture to unit 0
+        GL.glActiveTexture(GL.GL_TEXTURE0)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, self.texture_id)
+        loc = GL.glGetUniformLocation(self._compositor_program, "u_base")
+        if loc >= 0:
+            GL.glUniform1i(loc, 0)
+
+        # Bind layer texture to unit 1
+        GL.glActiveTexture(GL.GL_TEXTURE1)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, self._layer_texture)
+        loc = GL.glGetUniformLocation(self._compositor_program, "u_layer")
+        if loc >= 0:
+            GL.glUniform1i(loc, 1)
+
+        # Bind mask texture to unit 2
+        GL.glActiveTexture(GL.GL_TEXTURE2)
+        if has_mask:
+            GL.glBindTexture(GL.GL_TEXTURE_2D, self._mask_texture)
+        else:
+            GL.glBindTexture(GL.GL_TEXTURE_2D, self._white_texture)
+        loc = GL.glGetUniformLocation(self._compositor_program, "u_mask")
+        if loc >= 0:
+            GL.glUniform1i(loc, 2)
+
+        # Set uniforms
+        loc = GL.glGetUniformLocation(self._compositor_program, "u_opacity")
+        if loc >= 0:
+            GL.glUniform1f(loc, float(opacity))
+        loc = GL.glGetUniformLocation(self._compositor_program, "u_blend_mode")
+        if loc >= 0:
+            blend_idx = BLEND_MODES.index(blend_mode) if blend_mode in BLEND_MODES else 0
+            GL.glUniform1i(loc, blend_idx)
+        loc = GL.glGetUniformLocation(self._compositor_program, "u_has_mask")
+        if loc >= 0:
+            GL.glUniform1i(loc, 1 if has_mask else 0)
+        loc = GL.glGetUniformLocation(self._compositor_program, "u_clipping")
+        if loc >= 0:
+            GL.glUniform1i(loc, 1 if clipping else 0)
+
+        # Reset zoom/pan for compositing
+        z_loc = GL.glGetUniformLocation(self._compositor_program, "u_zoom_2d")
+        if z_loc >= 0:
+            GL.glUniform1f(z_loc, 1.0)
+        p_loc = GL.glGetUniformLocation(self._compositor_program, "u_pan_2d")
+        if p_loc >= 0:
+            GL.glUniform2f(p_loc, 0.0, 0.0)
+
+        GL.glDrawArrays(GL.GL_TRIANGLE_STRIP, 0, 4)
+        GL.glFinish()
+
+        # Read back result
+        pixels = GL.glReadPixels(0, 0, w, h, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+        result = np.frombuffer(pixels, dtype=np.uint8).reshape(h, w, 4).copy()
+        result = np.flipud(result)  # top-down
+
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
+        GL.glDeleteFramebuffers(1, [fbo])
+        GL.glDeleteTextures([out_tex])
+        GL.glActiveTexture(GL.GL_TEXTURE0)
+
+        return result
+
+    def _render_layers(self):
+        """Render all visible layers with blend modes and opacity. Updates the display texture."""
+        if self._original_image_data is None or not self._layers:
+            return
+        self.makeCurrent()
+        w, h = self.image_size
+
+        # Start with original image as base (top-down for our pipeline)
+        base = np.flipud(self._original_image_data.copy())  # original is bottom-up, convert to top-down
+
+        for layer in self._layers:
+            if not layer.get('visible', True):
+                continue
+            layer_type = layer.get('type', 'raster')
+
+            # Skip group layers (they just organize, don't render)
+            if layer_type == 'group':
+                continue
+
+            # Handle vector layers — rasterize their paths
+            if layer_type == 'vector':
+                layer_output = self._rasterize_vector_layer(layer, w, h)
+                if layer_output is None:
+                    continue
+                opacity = layer.get('opacity', 1.0)
+                blend_mode = layer.get('blend_mode', 'normal')
+                mask = layer.get('mask')
+                clipping = layer.get('clipping', False)
+                composited = self._composite_pass(base, layer_output, opacity, blend_mode,
+                                                  mask=mask, clipping=clipping)
+                if composited is not None:
+                    base = composited
+                continue
+
+            # Raster layer — run its shader
+            shader_name = layer['shader']
+            if shader_name == 'Original':
+                # Original shader = passthrough, layer output == current base
+                continue
+
+            # Save and set shader for this layer
+            saved_preset = self.current_preset
+            saved_params = dict(self.params)
+            self.current_preset = shader_name
+            self._compile_shader()
+            if self.program is None:
+                self.current_preset = saved_preset
+                self.params = saved_params
+                self._compile_shader()
+                continue
+
+            # Upload current base as the source texture for the shader
+            self._upload_texture(np.ascontiguousarray(np.flipud(base)))
+
+            # Render the layer's shader
+            layer_output = self._export_2d_single(self.program, layer['params'], w, h)
+            if layer_output is None:
+                self.current_preset = saved_preset
+                self.params = saved_params
+                self._compile_shader()
+                continue
+
+            # Composite layer onto base
+            opacity = layer.get('opacity', 1.0)
+            blend_mode = layer.get('blend_mode', 'normal')
+            mask = layer.get('mask')
+            clipping = layer.get('clipping', False)
+
+            if blend_mode == 'normal' and opacity >= 1.0 and mask is None and not clipping:
+                # Optimization: skip compositor for simple overwrite
+                base = layer_output
+            else:
+                composited = self._composite_pass(base, layer_output, opacity, blend_mode,
+                                                  mask=mask, clipping=clipping)
+                if composited is not None:
+                    base = composited
+                else:
+                    base = layer_output
+
+            # Restore shader state
+            self.current_preset = saved_preset
+            self.params = saved_params
+
+        # Upload final composited result for display
+        self._upload_texture(np.ascontiguousarray(np.flipud(base)))
+
+        # Restore current shader
+        self._compile_shader()
+        self.update()
+
+    def add_layer(self, name=None, shader=None, params=None):
+        """Add a new layer. If shader/params not given, uses current shader settings."""
+        if shader is None:
+            shader = self.current_preset
+        if params is None:
+            params = dict(self.params)
+        if name is None:
+            name = f"Layer {len(self._layers)}"
+        layer = {
+            'name': name,
+            'shader': shader,
+            'params': params,
+            'visible': True,
+            'locked': False,
+            'opacity': 1.0,
+            'blend_mode': 'normal',
+            'mask': None,           # numpy (H,W) uint8 grayscale mask, None=no mask
+            'clipping': False,      # True = clip to layer below's alpha
+            'group': None,          # group name, None = not in group
+            'type': 'raster',       # 'raster', 'vector', 'group'
+            'vector_paths': [],     # list of vector path dicts for vector layers
+        }
+        self._layers.append(layer)
+        # Also keep bake chain in sync for batch export compatibility
+        self._bake_chain.append({'shader': shader, 'params': params, 'enabled': True})
+
+        if self.mode_3d:
+            # In 3D mode, layers are applied as post-processing passes in _paint_3d.
+            # Reset to Original so the shader is only applied via the layer, not doubled.
+            self.current_preset = "Original"
+            self._init_params()
+            self._compile_shader()
+        else:
+            # 2D mode: render all layers into the composited texture
+            self._render_layers()
+            # Reset to Original so user can configure next layer
+            self.current_preset = "Original"
+            self._init_params()
+            self._compile_shader()
+        self.update()
+        return layer
+
+    def remove_layer(self, index):
+        """Remove a layer by index. Cannot remove the Background layer (index 0)."""
+        if index <= 0 or index >= len(self._layers):
+            return
+        self._layers.pop(index)
+        # Sync bake chain
+        chain_idx = index - 1  # layers[0] = Background (not in bake chain)
+        if 0 <= chain_idx < len(self._bake_chain):
+            self._bake_chain.pop(chain_idx)
+        self._render_layers()
+
+    def move_layer(self, from_idx, to_idx):
+        """Move a layer from one position to another. Cannot move Background (index 0)."""
+        if from_idx <= 0 or to_idx <= 0:
+            return
+        if from_idx >= len(self._layers) or to_idx >= len(self._layers):
+            return
+        layer = self._layers.pop(from_idx)
+        self._layers.insert(to_idx, layer)
+        self._render_layers()
+
+    def set_layer_prop(self, index, prop, value):
+        """Set a property on a layer and re-render."""
+        if index < 0 or index >= len(self._layers):
+            return
+        self._layers[index][prop] = value
+        if prop == 'visible' or prop == 'opacity' or prop == 'blend_mode':
+            self._render_layers()
+
+    # --- ANIMATION TIMELINE ---
+
+    def add_anim_frame(self):
+        """Add a new animation frame with a deep copy of current layers."""
+        import copy
+        frame = {
+            'layers': copy.deepcopy(self._layers),
+            'duration': int(1000 / max(1, self._anim_fps)),
+        }
+        self._anim_frames.append(frame)
+        return len(self._anim_frames) - 1
+
+    def delete_anim_frame(self, index):
+        """Delete an animation frame. Keeps at least 1 frame."""
+        if len(self._anim_frames) <= 1 or index < 0 or index >= len(self._anim_frames):
+            return
+        self._anim_frames.pop(index)
+        if self._anim_current_frame >= len(self._anim_frames):
+            self._anim_current_frame = len(self._anim_frames) - 1
+        self.set_anim_frame(self._anim_current_frame)
+
+    def duplicate_anim_frame(self, index):
+        """Duplicate an animation frame and insert after it."""
+        import copy
+        if index < 0 or index >= len(self._anim_frames):
+            return
+        dup = copy.deepcopy(self._anim_frames[index])
+        self._anim_frames.insert(index + 1, dup)
+
+    # --- Vector Layer Rendering ---
+    def _rasterize_vector_layer(self, layer, w, h):
+        """Rasterize a vector layer's paths to a numpy RGBA array using QPainter.
+        Returns (H, W, 4) uint8 top-down array, or None."""
+        from PyQt6.QtGui import QPainter, QPen, QBrush, QColor, QImage, QPainterPath
+        paths = layer.get('vector_paths', [])
+        if not paths:
+            return None
+
+        # Create a transparent QImage to render into
+        img = QImage(w, h, QImage.Format.Format_RGBA8888)
+        img.fill(QColor(0, 0, 0, 0))
+
+        painter = QPainter(img)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        for path_data in paths:
+            qpath = QPainterPath()
+            points = path_data.get('points', [])
+            closed = path_data.get('closed', False)
+            stroke_color = path_data.get('stroke_color', (255, 255, 255, 255))
+            fill_color = path_data.get('fill_color', None)
+            stroke_width = path_data.get('stroke_width', 2.0)
+
+            if not points:
+                continue
+
+            # Build the QPainterPath
+            if len(points) >= 2:
+                qpath.moveTo(points[0][0], points[0][1])
+                i = 1
+                while i < len(points):
+                    pt = points[i]
+                    if len(pt) == 2:
+                        # Line to
+                        qpath.lineTo(pt[0], pt[1])
+                        i += 1
+                    elif len(pt) == 6:
+                        # Cubic bezier: (cp1x, cp1y, cp2x, cp2y, endx, endy)
+                        qpath.cubicTo(pt[0], pt[1], pt[2], pt[3], pt[4], pt[5])
+                        i += 1
+                    else:
+                        qpath.lineTo(pt[0], pt[1])
+                        i += 1
+                if closed:
+                    qpath.closeSubpath()
+
+            # Set stroke
+            r, g, b, a = stroke_color
+            pen = QPen(QColor(r, g, b, a))
+            pen.setWidthF(stroke_width)
+            painter.setPen(pen)
+
+            # Set fill
+            if fill_color:
+                fr, fg, fb, fa = fill_color
+                painter.setBrush(QBrush(QColor(fr, fg, fb, fa)))
+            else:
+                painter.setBrush(QBrush(QColor(0, 0, 0, 0)))
+
+            painter.drawPath(qpath)
+
+        painter.end()
+
+        # Convert QImage to numpy array
+        ptr = img.bits()
+        ptr.setsize(w * h * 4)
+        arr = np.frombuffer(ptr, dtype=np.uint8).reshape(h, w, 4).copy()
+        return arr
+
+    def add_vector_layer(self, name=None):
+        """Add a new empty vector layer."""
+        if name is None:
+            name = f"Vector {len(self._layers)}"
+        layer = {
+            'name': name,
+            'shader': 'Original',
+            'params': {},
+            'visible': True,
+            'locked': False,
+            'opacity': 1.0,
+            'blend_mode': 'normal',
+            'mask': None,
+            'clipping': False,
+            'group': None,
+            'type': 'vector',
+            'vector_paths': [],
+        }
+        self._layers.append(layer)
+        self._render_layers()
+        return layer
+
+    def add_vector_path(self, layer_index, points, closed=False,
+                         stroke_color=(255, 255, 255, 255), fill_color=None,
+                         stroke_width=2.0):
+        """Add a vector path to a vector layer."""
+        if layer_index < 0 or layer_index >= len(self._layers):
+            return
+        layer = self._layers[layer_index]
+        if layer.get('type') != 'vector':
+            return
+        path = {
+            'points': points,
+            'closed': closed,
+            'stroke_color': stroke_color,
+            'fill_color': fill_color,
+            'stroke_width': stroke_width,
+        }
+        layer['vector_paths'].append(path)
+        self._render_layers()
+
+    def save_frame_state(self):
+        """Save current layer state into the current animation frame."""
+        import copy
+        if not self._anim_frames:
+            return
+        if self._anim_current_frame < len(self._anim_frames):
+            self._anim_frames[self._anim_current_frame]['layers'] = copy.deepcopy(self._layers)
+
+    def set_anim_frame(self, index):
+        """Switch to an animation frame, loading its layer state."""
+        import copy
+        if index < 0 or index >= len(self._anim_frames):
+            return
+        self._anim_current_frame = index
+        frame = self._anim_frames[index]
+        self._layers = copy.deepcopy(frame['layers'])
+        self._render_layers()
+
+    def _advance_anim_frame(self):
+        """Timer callback: advance to the next animation frame."""
+        if not self._anim_frames:
+            return
+        next_idx = self._anim_current_frame + 1
+        if next_idx >= len(self._anim_frames):
+            if self._anim_loop:
+                next_idx = 0
+            else:
+                self._anim_playing = False
+                self._anim_timer.stop()
+                return
+        self.set_anim_frame(next_idx)
+        self.animFrameChanged.emit()
+        # Set timer for next frame's duration
+        duration = self._anim_frames[self._anim_current_frame].get('duration', int(1000 / max(1, self._anim_fps)))
+        self._anim_timer.setInterval(duration)
+
+    def toggle_animation(self):
+        """Start or stop animation playback."""
+        if self._anim_playing:
+            self._anim_playing = False
+            self._anim_timer.stop()
+        else:
+            if not self._anim_frames:
+                return
+            self._anim_playing = True
+            interval = int(1000 / max(1, self._anim_fps))
+            self._anim_timer.setInterval(interval)
+            self._anim_timer.start()
+
+    def set_anim_fps(self, fps):
+        """Set animation FPS."""
+        self._anim_fps = max(1, min(60, fps))
+        if self._anim_playing:
+            self._anim_timer.setInterval(int(1000 / self._anim_fps))
 
     def _init_params(self):
         """Initialize parameters from shader definition."""
@@ -10850,6 +13068,14 @@ class ShaderCanvas(QOpenGLWidget):
 
         # Compile fragment shader
         frag_src = SHADERS[self.current_preset]["frag"]
+
+        # Inject alpha preservation: override shader alpha with original texture alpha.
+        # Many shaders hardcode alpha to 1.0 (e.g. vec4(result, 1.0)), which destroys
+        # transparency in PNGs. This line ensures the original alpha is always kept.
+        last_brace = frag_src.rfind('}')
+        if last_brace >= 0:
+            frag_src = frag_src[:last_brace] + "    f_color.a = texture(u_texture, v_uv).a;\n" + frag_src[last_brace:]
+
         frag_shader = GL.glCreateShader(GL.GL_FRAGMENT_SHADER)
         GL.glShaderSource(frag_shader, frag_src)
         GL.glCompileShader(frag_shader)
@@ -10943,7 +13169,11 @@ class ShaderCanvas(QOpenGLWidget):
         print("Compiled passthrough shader")
 
     def _compile_shader_3d(self):
-        """Compile the 3D shader program with current effect."""
+        """Compile the 3D PBR shader program.
+
+        This is a fixed PBR lighting shader — 2D shader effects are applied
+        as a post-processing pass in _paint_3d() using self.program.
+        """
         if self.program_3d is not None:
             GL.glDeleteProgram(self.program_3d)
 
@@ -10956,12 +13186,20 @@ class ShaderCanvas(QOpenGLWidget):
             print(f"3D Vertex shader error: {error}")
             return
 
-        # Create 3D fragment shader with the current effect
-        # We need to adapt the 2D fragment shader for 3D with lighting
-        shader_def = SHADERS.get(self.current_preset, SHADERS["Original"])
-        frag_2d = shader_def["frag"]
+        # Build a 3D PBR fragment shader with dynamic light count
+        num_lights = len(self.lights)
+        light_uniforms = "\n".join(
+            f"uniform vec3 u_light{i+1}_pos;\n"
+            f"uniform vec3 u_light{i+1}_color;\n"
+            f"uniform float u_light{i+1}_intensity;"
+            for i in range(num_lights)
+        )
+        light_calls = "\n    ".join(
+            f"lighting += calculateLight(u_light{i+1}_pos, u_light{i+1}_color, "
+            f"u_light{i+1}_intensity, normal, v_position, viewDir, u_roughness, u_metallic) * color;"
+            for i in range(num_lights)
+        )
 
-        # Build a 3D-compatible fragment shader with multiple light sources
         frag_src = f"""
 #version 330 core
 uniform sampler2D u_texture;
@@ -10969,20 +13207,19 @@ uniform mat4 u_model;
 uniform mat4 u_view;
 uniform mat4 u_projection;
 
-// Light uniforms
-uniform vec3 u_light1_pos;
-uniform vec3 u_light1_color;
-uniform float u_light1_intensity;
-uniform vec3 u_light2_pos;
-uniform vec3 u_light2_color;
-uniform float u_light2_intensity;
-uniform vec3 u_light3_pos;
-uniform vec3 u_light3_color;
-uniform float u_light3_intensity;
+// Light uniforms ({num_lights} lights)
+{light_uniforms}
 uniform float u_ambient_intensity;
 uniform float u_specular_power;
 uniform float u_specular_intensity;
 uniform vec3 u_camera_pos;
+
+// PBR material uniforms
+uniform vec4 u_base_color;
+uniform float u_metallic;
+uniform float u_roughness;
+uniform vec3 u_emissive;
+uniform float u_model_extent;
 
 in vec2 v_uv;
 in vec3 v_normal;
@@ -10990,41 +13227,39 @@ in vec3 v_position;
 
 out vec4 f_color;
 
-// Uniforms from shader
-{self._extract_uniforms(frag_2d)}
-
-vec3 calculateLight(vec3 lightPos, vec3 lightColor, float intensity, vec3 normal, vec3 fragPos, vec3 viewDir) {{
+vec3 calculateLight(vec3 lightPos, vec3 lightColor, float intensity, vec3 normal, vec3 fragPos, vec3 viewDir, float roughness, float metallic) {{
     if(intensity <= 0.0) return vec3(0.0);
 
     vec3 lightDir = normalize(lightPos - fragPos);
 
-    // Diffuse
+    // Diffuse - reduced by metallic (metals have no diffuse)
     float diff = max(dot(normal, lightDir), 0.0);
-    vec3 diffuse = diff * lightColor * intensity;
+    vec3 diffuse = diff * lightColor * intensity * (1.0 - metallic);
 
-    // Specular (Blinn-Phong)
+    // Specular (Blinn-Phong) - adjusted by roughness and metallic
     vec3 halfwayDir = normalize(lightDir + viewDir);
-    float spec = pow(max(dot(normal, halfwayDir), 0.0), u_specular_power);
-    vec3 specular = spec * lightColor * u_specular_intensity * intensity;
+    float adjusted_power = max(u_specular_power * (1.0 - roughness * 0.9), 2.0);
+    float spec = pow(max(dot(normal, halfwayDir), 0.0), adjusted_power);
+    float spec_strength = u_specular_intensity * (1.0 - roughness * 0.7) * (0.5 + metallic * 0.5);
+    vec3 specular = spec * lightColor * spec_strength * intensity;
 
-    // Attenuation
+    // Attenuation - normalize distance by model size for consistent falloff
     float distance = length(lightPos - fragPos);
-    float attenuation = 1.0 / (1.0 + 0.09 * distance + 0.032 * distance * distance);
+    float nd = distance / max(u_model_extent, 0.1);
+    float attenuation = 1.0 / (1.0 + 0.3 * nd + 0.1 * nd * nd);
 
     return (diffuse + specular) * attenuation;
 }}
 
 void main() {{
-    // Sample texture with shader effect
-    vec4 base_color = texture(u_texture, v_uv);
+    // Sample texture and multiply by material base color
+    vec4 tex_color = texture(u_texture, v_uv);
+    vec4 mat_color = tex_color * u_base_color;
+    vec3 color = mat_color.rgb;
 
-    // Apply basic color adjustments based on shader params
-    vec3 color = base_color.rgb;
-
-    {self._generate_3d_effect_code()}
-
-    // Calculate lighting
+    // Calculate lighting — flip normal if back-facing
     vec3 normal = normalize(v_normal);
+    if(!gl_FrontFacing) normal = -normal;
     vec3 viewDir = normalize(u_camera_pos - v_position);
 
     // Ambient
@@ -11032,11 +13267,12 @@ void main() {{
 
     // Add contributions from all lights
     vec3 lighting = ambient;
-    lighting += calculateLight(u_light1_pos, u_light1_color, u_light1_intensity, normal, v_position, viewDir) * color;
-    lighting += calculateLight(u_light2_pos, u_light2_color, u_light2_intensity, normal, v_position, viewDir) * color;
-    lighting += calculateLight(u_light3_pos, u_light3_color, u_light3_intensity, normal, v_position, viewDir) * color;
+    {light_calls}
 
-    f_color = vec4(clamp(lighting, 0.0, 1.0), base_color.a);
+    // Add emissive contribution
+    lighting += u_emissive;
+
+    f_color = vec4(clamp(lighting, 0.0, 1.0), mat_color.a);
 }}
 """
 
@@ -11212,6 +13448,10 @@ void main() {{
                 self._original_image_path = path
 
             self._has_image = True
+            # Reset 2D viewport zoom/pan on new image load
+            self.zoom_2d = 1.0
+            self.pan_2d_x = 0.0
+            self.pan_2d_y = 0.0
             self.update()
             self.textureLoaded.emit(path)
             return True
@@ -11294,16 +13534,44 @@ void main() {{
             h = int(self.height() * ratio)
 
             GL.glViewport(0, 0, w, h)
-            GL.glClearColor(0.12, 0.12, 0.12, 1.0)
+            GL.glClearColor(*self.bg_color)
             GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
 
             if self.mode_3d:
                 self._paint_3d(w, h)
             else:
                 self._paint_2d()
+                # Draw onion skin overlay for animation
+                if self._onion_skin and self._anim_frames:
+                    self._draw_onion_skin_overlay()
+                # Draw perspective/isometric guides as QPainter overlay
+                if self._guide_type != "none":
+                    self._draw_guides_overlay()
         except Exception as e:
             import traceback
             traceback.print_exc()
+
+    def _get_aspect_scale(self):
+        """Compute aspect ratio scale to fit image within viewport without stretching."""
+        iw, ih = self.image_size
+        ratio = self.devicePixelRatio()
+        vw = max(1, int(self.width() * ratio))
+        vh = max(1, int(self.height() * ratio))
+        img_aspect = iw / max(1, ih)
+        vp_aspect = vw / max(1, vh)
+        if img_aspect > vp_aspect:
+            # Image is wider than viewport — pillarbox (scale y down)
+            return (1.0, vp_aspect / img_aspect)
+        else:
+            # Image is taller than viewport — letterbox (scale x down)
+            return (img_aspect / vp_aspect, 1.0)
+
+    def _set_aspect_uniform(self, program):
+        """Set the u_aspect uniform on the given program."""
+        a_loc = GL.glGetUniformLocation(program, "u_aspect")
+        if a_loc >= 0:
+            ax, ay = self._get_aspect_scale()
+            GL.glUniform2f(a_loc, ax, ay)
 
     def _paint_2d(self):
         """Render 2D image with shader effect."""
@@ -11311,6 +13579,8 @@ void main() {{
             return
 
         GL.glDisable(GL.GL_DEPTH_TEST)
+        GL.glEnable(GL.GL_BLEND)
+        GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
 
         # Use passthrough shader for placeholder (no effects on checkerboard)
         if not self._has_image:
@@ -11319,6 +13589,17 @@ void main() {{
                 return
             GL.glUseProgram(self._passthrough_program)
             GL.glBindVertexArray(self.vao)
+            # Set 2D zoom/pan uniforms
+            z_loc = GL.glGetUniformLocation(self._passthrough_program, "u_zoom_2d")
+            if z_loc >= 0:
+                GL.glUniform1f(z_loc, self.zoom_2d)
+            p_loc = GL.glGetUniformLocation(self._passthrough_program, "u_pan_2d")
+            if p_loc >= 0:
+                GL.glUniform2f(p_loc, self.pan_2d_x, self.pan_2d_y)
+            # Checkerboard fills full viewport — no aspect correction
+            a_loc = GL.glGetUniformLocation(self._passthrough_program, "u_aspect")
+            if a_loc >= 0:
+                GL.glUniform2f(a_loc, 1.0, 1.0)
             GL.glActiveTexture(GL.GL_TEXTURE0)
             GL.glBindTexture(GL.GL_TEXTURE_2D, self.texture_id)
             tex_loc = GL.glGetUniformLocation(self._passthrough_program, "u_texture")
@@ -11345,28 +13626,32 @@ void main() {{
         GL.glUseProgram(self.program)
         GL.glBindVertexArray(self.vao)
 
-        # Bind texture
+        z_loc = GL.glGetUniformLocation(self.program, "u_zoom_2d")
+        if z_loc >= 0:
+            GL.glUniform1f(z_loc, self.zoom_2d)
+        p_loc = GL.glGetUniformLocation(self.program, "u_pan_2d")
+        if p_loc >= 0:
+            GL.glUniform2f(p_loc, self.pan_2d_x, self.pan_2d_y)
+        self._set_aspect_uniform(self.program)
+
         GL.glActiveTexture(GL.GL_TEXTURE0)
         GL.glBindTexture(GL.GL_TEXTURE_2D, self.texture_id)
 
-        # Set texture uniform
         tex_loc = GL.glGetUniformLocation(self.program, "u_texture")
         if tex_loc >= 0:
             GL.glUniform1i(tex_loc, 0)
-
-        # Set resolution uniform (needed by many shaders)
         res_loc = GL.glGetUniformLocation(self.program, "u_resolution")
         if res_loc >= 0:
             GL.glUniform2f(res_loc, float(w), float(h))
 
-        # Set other uniforms
         for name, value in self.params.items():
             loc = GL.glGetUniformLocation(self.program, name)
             if loc >= 0:
                 GL.glUniform1f(loc, float(value))
 
-        # Draw quad
         GL.glDrawArrays(GL.GL_TRIANGLE_STRIP, 0, 4)
+
+        GL.glDisable(GL.GL_BLEND)
 
         # Apply post-processing stack
         if self.post_process_stack:
@@ -11447,9 +13732,114 @@ void main() {{
 
             GL.glDrawArrays(GL.GL_TRIANGLE_STRIP, 0, 4)
 
+    def _apply_3d_post_pass(self, program, params, input_texture, target_fbo, w, h):
+        """Apply a single 2D shader post-processing pass (fullscreen quad).
+        Renders from input_texture to target_fbo using the given program and params."""
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, target_fbo)
+        GL.glViewport(0, 0, w, h)
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+        GL.glDisable(GL.GL_DEPTH_TEST)
+
+        GL.glUseProgram(program)
+        GL.glBindVertexArray(self.vao)
+
+        GL.glActiveTexture(GL.GL_TEXTURE0)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, input_texture)
+        tex_loc = GL.glGetUniformLocation(program, "u_texture")
+        if tex_loc >= 0:
+            GL.glUniform1i(tex_loc, 0)
+
+        res_loc = GL.glGetUniformLocation(program, "u_resolution")
+        if res_loc >= 0:
+            GL.glUniform2f(res_loc, float(w), float(h))
+
+        # Full-screen pass: no zoom/pan/aspect correction
+        z_loc = GL.glGetUniformLocation(program, "u_zoom_2d")
+        if z_loc >= 0:
+            GL.glUniform1f(z_loc, 1.0)
+        p_loc = GL.glGetUniformLocation(program, "u_pan_2d")
+        if p_loc >= 0:
+            GL.glUniform2f(p_loc, 0.0, 0.0)
+        a_loc = GL.glGetUniformLocation(program, "u_aspect")
+        if a_loc >= 0:
+            GL.glUniform2f(a_loc, 1.0, 1.0)
+
+        for name, value in params.items():
+            loc = GL.glGetUniformLocation(program, name)
+            if loc >= 0:
+                GL.glUniform1f(loc, float(value))
+
+        GL.glDrawArrays(GL.GL_TRIANGLE_STRIP, 0, 4)
+
+    def _composite_3d_to_screen(self, color_texture, alpha_mask_texture, target_fbo, w, h):
+        """Draw post-processed 3D result to screen, alpha-blended over background.
+
+        If alpha_mask_texture is None, uses the color_texture's own alpha (no shader passes).
+        If alpha_mask_texture is provided, uses composite shader to restore the 3D scene alpha
+        (since post-processing shaders may have destroyed the alpha channel).
+        """
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, target_fbo)
+        GL.glViewport(0, 0, w, h)
+        GL.glClearColor(*self.bg_color)
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+        GL.glDisable(GL.GL_DEPTH_TEST)
+        GL.glEnable(GL.GL_BLEND)
+        GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
+
+        if alpha_mask_texture is not None:
+            # Use composite shader: processed RGB + mask alpha
+            program = self._compile_3d_composite_shader()
+            if program is None:
+                # Fallback to passthrough (alpha may be wrong but at least something renders)
+                alpha_mask_texture = None
+
+        if alpha_mask_texture is not None:
+            GL.glUseProgram(program)
+            GL.glBindVertexArray(self.vao)
+
+            GL.glActiveTexture(GL.GL_TEXTURE0)
+            GL.glBindTexture(GL.GL_TEXTURE_2D, color_texture)
+            tex_loc = GL.glGetUniformLocation(program, "u_texture")
+            if tex_loc >= 0:
+                GL.glUniform1i(tex_loc, 0)
+
+            GL.glActiveTexture(GL.GL_TEXTURE1)
+            GL.glBindTexture(GL.GL_TEXTURE_2D, alpha_mask_texture)
+            mask_loc = GL.glGetUniformLocation(program, "u_alpha_mask")
+            if mask_loc >= 0:
+                GL.glUniform1i(mask_loc, 1)
+
+            # Set vertex shader uniforms for fullscreen quad
+            z_loc = GL.glGetUniformLocation(program, "u_zoom_2d")
+            if z_loc >= 0:
+                GL.glUniform1f(z_loc, 1.0)
+            p_loc = GL.glGetUniformLocation(program, "u_pan_2d")
+            if p_loc >= 0:
+                GL.glUniform2f(p_loc, 0.0, 0.0)
+            a_loc = GL.glGetUniformLocation(program, "u_aspect")
+            if a_loc >= 0:
+                GL.glUniform2f(a_loc, 1.0, 1.0)
+
+            GL.glDrawArrays(GL.GL_TRIANGLE_STRIP, 0, 4)
+            GL.glActiveTexture(GL.GL_TEXTURE0)  # Reset active texture unit
+        else:
+            # Use passthrough with texture's own alpha (no post-processing applied)
+            self._apply_3d_post_pass(
+                self._passthrough_program or self.program,
+                {}, color_texture, target_fbo, w, h)
+
+        GL.glDisable(GL.GL_BLEND)
+
     def _paint_3d(self, w, h):
-        """Render 3D model with shader effect."""
-        # If viewing an AOV pass, use the AOV renderer instead
+        """Render 3D model, then apply 2D shader layers as post-processing.
+
+        Shader effects only affect the 3D model, not the background:
+        1. Render 3D scene to FBO with transparent background (alpha=0)
+        2. Save the alpha mask (model pixels have alpha=1)
+        3. Apply shader post-processing passes (may destroy alpha)
+        4. Composite result over background using saved alpha mask
+        """
+        # If viewing an AOV pass, use the AOV renderer directly (no post-processing)
         if self.render_pass_mode != "combined" and self.render_pass_mode in AOV_SHADERS:
             self._paint_3d_aov(self.render_pass_mode, w, h)
             return
@@ -11457,7 +13847,96 @@ void main() {{
         if self.program_3d is None or self.vao_3d is None:
             return
 
+        # --- Phase 1: Render 3D scene to FBO with transparent background ---
+        self._ensure_3d_pp_fbo(w, h)
+        if self._3d_pp_fbo is None:
+            self._paint_3d_scene(w, h)
+            return
+
+        qt_fbo = self.defaultFramebufferObject()
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, self._3d_pp_fbo)
+        GL.glViewport(0, 0, w, h)
+        GL.glClearColor(0.0, 0.0, 0.0, 0.0)  # Transparent background
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
+        self._paint_3d_scene(w, h)
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, qt_fbo)
+
+        # --- Phase 2: Apply shader layers as post-processing ---
+        GL.glDisable(GL.GL_DEPTH_TEST)
+
+        # Collect post-processing passes: visible layers + current "live" shader
+        passes = []
+        for layer in self._layers:
+            if not layer.get('visible', True):
+                continue
+            shader_name = layer['shader']
+            if shader_name == 'Original':
+                continue
+            program = self._compile_post_shader(shader_name)
+            if program is not None:
+                passes.append((program, layer['params']))
+
+        # Also apply the current "live" shader if it's not Original
+        # (this handles the case where user selects a shader but hasn't added it as a layer yet)
+        if self.current_preset != "Original" and self.program is not None:
+            passes.append((self.program, self.params))
+
+        if not passes:
+            # No post-processing — blit 3D scene with alpha blending over bg
+            # (the 3D render already has correct alpha: 1 for model, 0 for bg)
+            self._composite_3d_to_screen(self._3d_pp_texture, None, qt_fbo, w, h)
+            return
+
+        # Save alpha mask before post-processing (shaders may destroy alpha)
+        self._ensure_3d_alpha_texture(w, h)
+        if self._3d_alpha_texture is not None:
+            GL.glBindFramebuffer(GL.GL_READ_FRAMEBUFFER, self._3d_pp_fbo)
+            GL.glBindTexture(GL.GL_TEXTURE_2D, self._3d_alpha_texture)
+            GL.glCopyTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h)
+            GL.glBindFramebuffer(GL.GL_READ_FRAMEBUFFER, qt_fbo)
+
+        # Set transparent clear color for intermediate post-processing FBOs
+        GL.glClearColor(0.0, 0.0, 0.0, 0.0)
+
+        if len(passes) == 1:
+            # Single pass — render to FBO2, then composite to screen
+            self._ensure_3d_pp_fbo2(w, h)
+            program, params = passes[0]
+            if self._3d_pp_fbo2 is not None:
+                self._apply_3d_post_pass(program, params, self._3d_pp_texture,
+                                         self._3d_pp_fbo2, w, h)
+                result_texture = self._3d_pp_texture2
+            else:
+                # Fallback: render to screen without alpha masking
+                self._apply_3d_post_pass(program, params, self._3d_pp_texture, qt_fbo, w, h)
+                return
+        else:
+            # Multi-pass: ping-pong between FBOs
+            self._ensure_3d_pp_fbo2(w, h)
+            if self._3d_pp_fbo2 is None:
+                # Fallback: only apply the last pass
+                program, params = passes[-1]
+                self._apply_3d_post_pass(program, params, self._3d_pp_texture, qt_fbo, w, h)
+                return
+
+            current_input = self._3d_pp_texture
+            fbos = [self._3d_pp_fbo2, self._3d_pp_fbo]
+            textures = [self._3d_pp_texture2, self._3d_pp_texture]
+            for i, (program, params) in enumerate(passes):
+                target_fbo = fbos[i % 2]
+                self._apply_3d_post_pass(program, params, current_input, target_fbo, w, h)
+                current_input = textures[i % 2]
+            result_texture = current_input
+
+        # --- Phase 3: Composite result over background using alpha mask ---
+        self._composite_3d_to_screen(result_texture, self._3d_alpha_texture, qt_fbo, w, h)
+
+    def _paint_3d_scene(self, w, h):
+        """Render the 3D PBR scene to the currently bound framebuffer."""
         GL.glEnable(GL.GL_DEPTH_TEST)
+        GL.glEnable(GL.GL_CULL_FACE)
+        GL.glCullFace(GL.GL_BACK)
+        GL.glFrontFace(GL.GL_CCW)
         GL.glUseProgram(self.program_3d)
         GL.glBindVertexArray(self.vao_3d)
 
@@ -11475,7 +13954,7 @@ void main() {{
         aspect = w / h if h > 0 else 1.0
         model = self._make_rotation_matrix()
         view = self._make_view_matrix()
-        projection = self._make_perspective_matrix(45.0, aspect, 0.1, 100.0)
+        projection = self._make_perspective_matrix(self.fov, aspect, self.near_plane, self.far_plane)
 
         model_loc = GL.glGetUniformLocation(self.program_3d, "u_model")
         view_loc = GL.glGetUniformLocation(self.program_3d, "u_view")
@@ -11518,14 +13997,55 @@ void main() {{
         if cam_pos_loc >= 0:
             GL.glUniform3f(cam_pos_loc, 0.0, 0.0, self.zoom)
 
-        # Set shader-specific uniforms
-        for name, value in self.params.items():
-            loc = GL.glGetUniformLocation(self.program_3d, name)
-            if loc >= 0:
-                GL.glUniform1f(loc, float(value))
+        # Model extent for scale-aware attenuation
+        ext_loc = GL.glGetUniformLocation(self.program_3d, "u_model_extent")
+        if ext_loc >= 0:
+            GL.glUniform1f(ext_loc, self._model_extent)
 
-        # Draw model
-        GL.glDrawArrays(GL.GL_TRIANGLES, 0, self.model_vertex_count)
+        # Cache PBR uniform locations
+        bc_loc = GL.glGetUniformLocation(self.program_3d, "u_base_color")
+        met_loc = GL.glGetUniformLocation(self.program_3d, "u_metallic")
+        rough_loc = GL.glGetUniformLocation(self.program_3d, "u_roughness")
+        em_loc = GL.glGetUniformLocation(self.program_3d, "u_emissive")
+
+        # Draw model — per-mesh-range material switching if available
+        if self._mesh_ranges and self._gltf_materials:
+            for start, count, mat_idx in self._mesh_ranges:
+                mat = self._gltf_materials[mat_idx] if 0 <= mat_idx < len(self._gltf_materials) else {}
+                # Bind per-material texture, or white fallback for untextured materials
+                mat_tex = self._material_texture_ids.get(mat_idx)
+                if mat_tex is not None:
+                    GL.glBindTexture(GL.GL_TEXTURE_2D, mat_tex)
+                else:
+                    GL.glBindTexture(GL.GL_TEXTURE_2D, self._white_texture)
+                bc = mat.get("base_color", [1.0, 1.0, 1.0, 1.0])
+                if bc_loc >= 0:
+                    GL.glUniform4f(bc_loc, bc[0], bc[1], bc[2], bc[3])
+                if met_loc >= 0:
+                    GL.glUniform1f(met_loc, float(mat.get("metallic", 0.0)))
+                if rough_loc >= 0:
+                    GL.glUniform1f(rough_loc, float(mat.get("roughness", 0.5)))
+                em = mat.get("emissive", [0.0, 0.0, 0.0])
+                if em_loc >= 0:
+                    GL.glUniform3f(em_loc, em[0], em[1], em[2])
+                GL.glDrawArrays(GL.GL_TRIANGLES, start, count)
+        else:
+            # Single-material fallback (OBJ, primitives, or no materials)
+            mat = self._gltf_materials[0] if self._gltf_materials else {}
+            bc = mat.get("base_color", [1.0, 1.0, 1.0, 1.0])
+            if bc_loc >= 0:
+                GL.glUniform4f(bc_loc, bc[0], bc[1], bc[2], bc[3])
+            if met_loc >= 0:
+                GL.glUniform1f(met_loc, float(mat.get("metallic", 0.0)))
+            if rough_loc >= 0:
+                GL.glUniform1f(rough_loc, float(mat.get("roughness", 0.5)))
+            em = mat.get("emissive", [0.0, 0.0, 0.0])
+            if em_loc >= 0:
+                GL.glUniform3f(em_loc, em[0], em[1], em[2])
+            GL.glDrawArrays(GL.GL_TRIANGLES, 0, self.model_vertex_count)
+
+        # Disable face culling after 3D rendering so it doesn't affect 2D paths
+        GL.glDisable(GL.GL_CULL_FACE)
 
     def resizeGL(self, w, h):
         ratio = self.devicePixelRatio()
@@ -11549,16 +14069,93 @@ void main() {{
         else:
             self.animation_timer.stop()
 
+    def get_camera_state(self):
+        """Return a dict capturing all current camera parameters."""
+        return {
+            "rotation_x": self.rotation_x,
+            "rotation_y": self.rotation_y,
+            "rotation_z": self.rotation_z,
+            "zoom": self.zoom,
+            "pan_x": self.pan_x,
+            "pan_y": self.pan_y,
+            "fov": self.fov,
+            "near_plane": self.near_plane,
+            "far_plane": self.far_plane,
+            "auto_rotate": self.auto_rotate,
+            "rotation_speed": self.rotation_speed,
+        }
+
+    def set_camera_state(self, state):
+        """Apply a camera state dict to all camera parameters."""
+        self.rotation_x = state.get("rotation_x", 0.0)
+        self.rotation_y = state.get("rotation_y", 0.0)
+        self.rotation_z = state.get("rotation_z", 0.0)
+        self.zoom = state.get("zoom", getattr(self, '_initial_zoom', 2.5))
+        self.pan_x = state.get("pan_x", 0.0)
+        self.pan_y = state.get("pan_y", 0.0)
+        self.fov = state.get("fov", 45.0)
+        self.near_plane = state.get("near_plane", 0.1)
+        self.far_plane = state.get("far_plane", 100.0)
+        self.auto_rotate = state.get("auto_rotate", False)
+        self.rotation_speed = state.get("rotation_speed", 1.0)
+        if self.auto_rotate:
+            self.animation_timer.start()
+        else:
+            self.animation_timer.stop()
+        self.update()
+
+    def get_lighting_state(self):
+        """Return a dict capturing all lighting parameters."""
+        return {
+            "lights": copy.deepcopy(self.lights),
+            "ambient_intensity": self.ambient_intensity,
+            "specular_power": self.specular_power,
+            "specular_intensity": self.specular_intensity,
+        }
+
+    def set_lighting_state(self, state):
+        """Apply a lighting state dict. Recompiles shader if light count changed."""
+        old_count = len(self.lights)
+        self.lights = copy.deepcopy(state.get("lights", self._get_default_lights()))
+        self.ambient_intensity = state.get("ambient_intensity", 0.2)
+        self.specular_power = state.get("specular_power", 32.0)
+        self.specular_intensity = state.get("specular_intensity", 0.5)
+        if len(self.lights) != old_count:
+            self._compile_shader_3d()
+        self.update()
+
+    def reset_camera(self):
+        """Reset camera to default orientation and auto-fit zoom."""
+        self.rotation_x = 0.0
+        self.rotation_y = 0.0
+        self.rotation_z = 0.0
+        self.pan_x = 0.0
+        self.pan_y = 0.0
+        self.fov = 45.0
+        self.near_plane = 0.1
+        self.far_plane = 100.0
+        self.auto_rotate = False
+        self.rotation_speed = 1.0
+        self.zoom = getattr(self, '_initial_zoom', 2.5)
+        self.animation_timer.stop()
+        self.update()
+
     def load_3d_model(self, path):
         """Load a 3D model (OBJ, GLTF, GLB)."""
         ext = os.path.splitext(path)[1].lower()
 
         verts, uvs, norms = None, None, None
+        materials, texture_image, scene_lights, mesh_ranges = None, None, None, None
+        texture_images = {}
 
         if ext == '.obj':
             verts, uvs, norms = load_obj(path)
         elif ext in ['.gltf', '.glb']:
-            verts, uvs, norms = load_gltf(path)
+            result = load_gltf(path)
+            if result is not None and result[0] is not None:
+                verts, uvs, norms, materials, texture_image, scene_lights, mesh_ranges, texture_images = result
+            else:
+                verts = None
         else:
             print(f"Unsupported format: {ext}")
             return False
@@ -11569,6 +14166,79 @@ void main() {{
         self._setup_3d_model(verts, uvs, norms)
         self.mode_3d = True
         self.image_path = path
+
+        # Store GLTF materials and mesh ranges
+        self._gltf_materials = materials if materials else []
+        self._gltf_texture_image = texture_image
+        self._mesh_ranges = mesh_ranges if mesh_ranges else []
+
+        # Upload per-material textures
+        self._material_texture_ids = {}
+        if texture_images and materials:
+            self.makeCurrent()
+            # Upload each unique texture and map material indices to GL texture IDs
+            tex_idx_to_gl = {}  # {gltf_texture_idx: GL texture ID}
+            for tex_idx, pil_img in texture_images.items():
+                tex_data = np.array(pil_img.convert("RGBA"), dtype=np.uint8)
+                gl_tex = GL.glGenTextures(1)
+                GL.glBindTexture(GL.GL_TEXTURE_2D, gl_tex)
+                GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
+                GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
+                GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_REPEAT)
+                GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_REPEAT)
+                flipped = np.ascontiguousarray(np.flipud(tex_data))
+                GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA, pil_img.width, pil_img.height,
+                                0, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, flipped)
+                tex_idx_to_gl[tex_idx] = gl_tex
+                print(f"  Uploaded texture {tex_idx}: {pil_img.width}x{pil_img.height} -> GL {gl_tex}")
+
+            # Map each material index to its GL texture ID
+            for mat_idx, mat in enumerate(materials):
+                mat_tex_idx = mat.get('base_color_texture')
+                if mat_tex_idx is not None and mat_tex_idx in tex_idx_to_gl:
+                    self._material_texture_ids[mat_idx] = tex_idx_to_gl[mat_tex_idx]
+
+            # Set the first texture as the default fallback
+            if tex_idx_to_gl:
+                first_gl_tex = next(iter(tex_idx_to_gl.values()))
+                self.texture_id = first_gl_tex
+                first_img = next(iter(texture_images.values()))
+                self.image_size = (first_img.width, first_img.height)
+
+            print(f"Loaded {len(tex_idx_to_gl)} textures, mapped to {len(self._material_texture_ids)} materials")
+            for mi, mat in enumerate(materials):
+                has_tex = "YES" if mi in self._material_texture_ids else "NO"
+                bc = mat.get('base_color', [1,1,1,1])
+                tex_idx = mat.get('base_color_texture')
+                print(f"  Mat {mi}: tex_idx={tex_idx}, has_gl_tex={has_tex}, base_color={bc[:3]}")
+            for start, cnt, mi in self._mesh_ranges:
+                print(f"  Range: verts [{start}..{start+cnt}), mat={mi}")
+        elif texture_image is not None:
+            # Fallback: single texture for all materials
+            self.makeCurrent()
+            tex_data = np.array(texture_image.convert("RGBA"), dtype=np.uint8)
+            self._upload_texture(np.ascontiguousarray(np.flipud(tex_data)))
+            self.image_size = (texture_image.width, texture_image.height)
+            print(f"Loaded GLTF texture: {texture_image.width}x{texture_image.height}")
+
+        # Apply scene lights if present, otherwise use model-scaled defaults
+        if scene_lights:
+            self.lights = []
+            for sl in scene_lights:
+                self.lights.append({
+                    "pos": list(sl["position"]),
+                    "color": list(sl["color"]),
+                    "intensity": sl["intensity"],
+                })
+            print(f"Applied {len(scene_lights)} scene lights from GLTF")
+        else:
+            self.lights = self._get_default_lights()
+
+        print(f"Model extent: {self._model_extent:.2f}, zoom: {self.zoom:.2f}")
+        for i, l in enumerate(self.lights):
+            dist = (l['pos'][0]**2 + l['pos'][1]**2 + l['pos'][2]**2)**0.5
+            print(f"  Light {i+1}: pos={l['pos']}, dist={dist:.2f}, intensity={l['intensity']}")
+
         self._compile_shader_3d()
         self.update()
         return True
@@ -11584,22 +14254,67 @@ void main() {{
 
         self._setup_3d_model(verts, uvs, norms)
         self.mode_3d = True
+        self.lights = self._get_default_lights()
         self._compile_shader_3d()
         self.update()
         return True
+
+    def _get_default_lights(self):
+        """Get default 3-point lighting scaled well outside the model."""
+        # Model extends ±extent/2 from origin. Place lights at ~2x the extent
+        # so they're clearly outside the bounding sphere.
+        s = max(2.0, self._model_extent * 2.0)
+        return [
+            {"pos": [s, s, s], "color": [1.0, 1.0, 1.0], "intensity": 1.5},
+            {"pos": [-s, s*0.6, s*0.3], "color": [0.3, 0.5, 1.0], "intensity": 0.8},
+            {"pos": [0.0, -s*0.4, s], "color": [1.0, 0.8, 0.6], "intensity": 0.5},
+        ]
 
     def _setup_3d_model(self, verts, uvs, norms):
         """Setup VAO/VBO for 3D model."""
         self.makeCurrent()
 
+        # Clear any existing 3D paint from previous model
+        self.reset_3d_paint()
+        # Invalidate UV pick shader cache (light count may change)
+        self._3d_uv_program = None
+
         # Interleave vertex data: pos(3) + uv(2) + normal(3) = 8 floats per vertex
         vertex_count = len(verts) // 3
         self.model_vertex_count = vertex_count
 
+        # Compute bounding box and auto-center/auto-fit
+        positions = np.array(verts, dtype=np.float32).reshape(-1, 3)
+        bbox_min = positions.min(axis=0)
+        bbox_max = positions.max(axis=0)
+        center = (bbox_min + bbox_max) / 2.0
+        extent = bbox_max - bbox_min
+        max_extent = float(max(extent))
+
+        # Center vertices at origin
+        verts_centered = np.array(verts, dtype=np.float32).copy()
+        for i in range(vertex_count):
+            verts_centered[i*3]   -= center[0]
+            verts_centered[i*3+1] -= center[1]
+            verts_centered[i*3+2] -= center[2]
+
+        # Auto-fit zoom: place camera so model fills ~60% of viewport
+        # With a 45-degree FOV, visible height at distance d is ~2*d*tan(22.5°)
+        # We want max_extent to be ~60% of visible height
+        if max_extent > 1e-6:
+            self.zoom = max_extent / (2.0 * math.tan(math.radians(22.5)) * 0.6)
+        else:
+            self.zoom = 2.5
+        self._initial_zoom = self.zoom
+        self.pan_x = 0.0
+        self.pan_y = 0.0
+        self._model_extent = max_extent
+        print(f"Model bounds: extent={extent}, center={center}, auto-zoom={self.zoom:.2f}")
+
         interleaved = []
         for i in range(vertex_count):
             interleaved.extend([
-                verts[i*3], verts[i*3+1], verts[i*3+2],
+                verts_centered[i*3], verts_centered[i*3+1], verts_centered[i*3+2],
                 uvs[i*2], uvs[i*2+1],
                 norms[i*3], norms[i*3+1], norms[i*3+2]
             ])
@@ -11636,6 +14351,10 @@ void main() {{
         """Switch back to 2D mode."""
         self.mode_3d = False
         self.set_auto_rotate(False)
+        # Reset 2D viewport zoom/pan
+        self.zoom_2d = 1.0
+        self.pan_2d_x = 0.0
+        self.pan_2d_y = 0.0
         self.update()
 
     def export_to_image(self, width=None, height=None):
@@ -11685,6 +14404,18 @@ void main() {{
 
         GL.glUseProgram(program)
         GL.glBindVertexArray(self.vao)
+
+        # Reset 2D zoom/pan/aspect for export (always render full image)
+        z_loc = GL.glGetUniformLocation(program, "u_zoom_2d")
+        if z_loc >= 0:
+            GL.glUniform1f(z_loc, 1.0)
+        p_loc = GL.glGetUniformLocation(program, "u_pan_2d")
+        if p_loc >= 0:
+            GL.glUniform2f(p_loc, 0.0, 0.0)
+        a_loc = GL.glGetUniformLocation(program, "u_aspect")
+        if a_loc >= 0:
+            GL.glUniform2f(a_loc, 1.0, 1.0)
+
         GL.glActiveTexture(GL.GL_TEXTURE0)
         GL.glBindTexture(GL.GL_TEXTURE_2D, self.texture_id)
 
@@ -11712,7 +14443,8 @@ void main() {{
         return image_data
 
     def _export_3d(self, width, height):
-        """Export 3D scene to image."""
+        """Export 3D scene to image with 2D shader post-processing applied."""
+        # Step 1: Render 3D PBR scene to a temporary FBO
         fbo = GL.glGenFramebuffers(1)
         GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, fbo)
         tex = GL.glGenTextures(1)
@@ -11738,20 +14470,34 @@ void main() {{
             return None
 
         GL.glViewport(0, 0, width, height)
-        GL.glClearColor(0.12, 0.12, 0.12, 1.0)
+        GL.glClearColor(*self.bg_color)
         GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
-        self._paint_3d(width, height)
+        self._paint_3d_scene(width, height)
         GL.glFinish()
 
         pixels = GL.glReadPixels(0, 0, width, height, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
-        image_data = np.frombuffer(pixels, dtype=np.uint8).reshape(height, width, 4).copy()
-        image_data = np.flipud(image_data)
+        scene_data = np.frombuffer(pixels, dtype=np.uint8).reshape(height, width, 4).copy()
+        scene_data = np.flipud(scene_data)
 
         GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
         GL.glDeleteFramebuffers(1, [fbo])
         GL.glDeleteTextures([tex])
         GL.glDeleteRenderbuffers(1, [depth_rb])
-        return image_data
+
+        # Step 2: Apply 2D shader post-processing to the 3D render
+        if self.program is not None:
+            saved_tex = self.texture_id
+            # Prevent _upload_texture from deleting the original model texture
+            self.texture_id = None
+            self._upload_texture(np.ascontiguousarray(np.flipud(scene_data)))
+            result = self._export_2d_single(self.program, self.params, width, height)
+            # Delete the temporary scene texture and restore original
+            if self.texture_id is not None:
+                GL.glDeleteTextures([self.texture_id])
+            self.texture_id = saved_tex
+            return result if result is not None else scene_data
+
+        return scene_data
 
     # --- AOV Render Passes ---
 
@@ -11805,7 +14551,7 @@ void main() {{
         aspect = w / h if h > 0 else 1.0
         model = self._make_rotation_matrix()
         view = self._make_view_matrix()
-        projection = self._make_perspective_matrix(45.0, aspect, 0.1, 100.0)
+        projection = self._make_perspective_matrix(self.fov, aspect, self.near_plane, self.far_plane)
         model_loc = GL.glGetUniformLocation(program, "u_model")
         view_loc = GL.glGetUniformLocation(program, "u_view")
         proj_loc = GL.glGetUniformLocation(program, "u_projection")
@@ -11906,9 +14652,163 @@ void main() {{
             [0, 0, 0, 1]
         ], dtype=np.float32)
 
+    # --- ONION SKIN OVERLAY ---
+    def _draw_onion_skin_overlay(self):
+        """Draw semi-transparent previous/next animation frames as onion skin."""
+        from PyQt6.QtGui import QPainter, QImage, QColor
+        current = self._anim_current_frame
+        count = self._onion_skin_count
+        painter = QPainter(self)
+        w, h = self.width(), self.height()
+
+        for offset in range(-count, count + 1):
+            if offset == 0:
+                continue
+            idx = current + offset
+            if idx < 0 or idx >= len(self._anim_frames):
+                continue
+            frame = self._anim_frames[idx]
+            # Get frame's first layer data to render as ghost
+            if not frame.get('layers'):
+                continue
+            # Use a tinted semi-transparent overlay
+            alpha = max(20, int(80 / abs(offset)))
+            if offset < 0:
+                tint = QColor(0, 100, 255, alpha)  # Blue for previous frames
+            else:
+                tint = QColor(255, 100, 0, alpha)   # Orange for next frames
+            painter.fillRect(0, 0, 2, 2, tint)  # Minimal indicator
+            # The real onion skin would render the frame's layers to texture,
+            # but for now draw a colored border indicator
+            painter.setPen(tint)
+            painter.drawRect(offset * 3 + w // 2, 5, 6, 6)
+
+        painter.end()
+
+    # --- PERSPECTIVE / ISOMETRIC GUIDES ---
+    def _draw_guides_overlay(self):
+        """Draw perspective or isometric guides as a QPainter overlay on the GL widget."""
+        from PyQt6.QtGui import QPainter, QPen, QColor
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        alpha = int(255 * self._guide_opacity)
+        pen = QPen(QColor(0, 200, 255, alpha))
+        pen.setWidth(1)
+        painter.setPen(pen)
+
+        w, h = self.width(), self.height()
+        cx, cy = w // 2, h // 2
+
+        if self._guide_type == "grid":
+            # Simple grid
+            spacing = 40
+            for x in range(0, w, spacing):
+                painter.drawLine(x, 0, x, h)
+            for y in range(0, h, spacing):
+                painter.drawLine(0, y, w, y)
+
+        elif self._guide_type == "isometric":
+            # Isometric grid (30-degree angles)
+            import math
+            angle = math.radians(30)
+            step = 40
+            for i in range(-40, 80):
+                x0 = cx + i * step
+                painter.drawLine(int(x0), 0, int(x0 - h * math.cos(angle) / math.sin(angle)), h)
+                painter.drawLine(int(x0), 0, int(x0 + h * math.cos(angle) / math.sin(angle)), h)
+            # Horizontal lines
+            for y in range(0, h, step):
+                painter.drawLine(0, y, w, y)
+
+        elif self._guide_type == "1pt":
+            # One-point perspective — vanishing point at center
+            painter.drawLine(cx, cy, 0, 0)
+            painter.drawLine(cx, cy, w, 0)
+            painter.drawLine(cx, cy, 0, h)
+            painter.drawLine(cx, cy, w, h)
+            painter.drawLine(cx, cy, 0, cy)
+            painter.drawLine(cx, cy, w, cy)
+            painter.drawLine(cx, cy, cx, 0)
+            painter.drawLine(cx, cy, cx, h)
+            # Extra diagonal lines
+            painter.drawLine(cx, cy, w // 4, 0)
+            painter.drawLine(cx, cy, 3 * w // 4, 0)
+            painter.drawLine(cx, cy, w // 4, h)
+            painter.drawLine(cx, cy, 3 * w // 4, h)
+            # Horizon line
+            pen2 = QPen(QColor(255, 200, 0, alpha))
+            pen2.setWidth(1)
+            painter.setPen(pen2)
+            painter.drawLine(0, cy, w, cy)
+
+        elif self._guide_type == "2pt":
+            # Two-point perspective — vanishing points at left and right edges
+            vp1x, vp1y = -w // 4, cy
+            vp2x, vp2y = w + w // 4, cy
+            for i in range(0, h, h // 8):
+                painter.drawLine(vp1x, vp1y, w, i)
+                painter.drawLine(vp2x, vp2y, 0, i)
+            # Horizon line
+            pen2 = QPen(QColor(255, 200, 0, alpha))
+            pen2.setWidth(1)
+            painter.setPen(pen2)
+            painter.drawLine(0, cy, w, cy)
+
+        elif self._guide_type == "3pt":
+            # Three-point perspective
+            vp1x, vp1y = -w // 4, cy
+            vp2x, vp2y = w + w // 4, cy
+            vp3x, vp3y = cx, -h // 2
+            for i in range(0, h, h // 8):
+                painter.drawLine(vp1x, vp1y, w, i)
+                painter.drawLine(vp2x, vp2y, 0, i)
+            for i in range(0, w, w // 8):
+                painter.drawLine(vp3x, vp3y, i, h)
+
+        painter.end()
+
+    # --- TABLET / PRESSURE ---
+    def tabletEvent(self, event):
+        """Handle tablet/stylus events for pressure sensitivity."""
+        etype = event.type()
+        self._tablet_pressure = event.pressure()  # 0.0 - 1.0
+
+        if etype == QtCore.QEvent.Type.TabletPress:
+            # Treat as mouse press
+            self.mouse_pressed = True
+            self.last_mouse_pos = event.position()
+            self.mouse_button = QtCore.Qt.MouseButton.LeftButton
+            if self._active_tool != "none":
+                if self.mode_3d:
+                    self._on_3d_paint_press(event.position(), modifiers=event.modifiers())
+                else:
+                    self._on_paint_press(event.position(), modifiers=event.modifiers())
+            event.accept()
+        elif etype == QtCore.QEvent.Type.TabletMove:
+            if self.mouse_pressed and self._active_tool != "none":
+                self._tablet_pressure = event.pressure()
+                if self.mode_3d:
+                    self._on_3d_paint_move(event.position())
+                else:
+                    self._on_paint_move(event.position())
+            event.accept()
+        elif etype == QtCore.QEvent.Type.TabletRelease:
+            if self._active_tool != "none":
+                if self.mode_3d:
+                    self._on_3d_paint_release()
+                else:
+                    self._on_paint_release(event.position())
+            self.mouse_pressed = False
+            self.mouse_button = None
+            self._tablet_pressure = 1.0  # Reset to full pressure
+            event.accept()
+        else:
+            super().tabletEvent(event)
+
     # --- MOUSE CONTROLS ---
     def mousePressEvent(self, event):
-        """Handle mouse press for orbit/pan controls and color picker."""
+        """Handle mouse press for orbit/pan controls, color picker, and paint tools."""
+        # Debug: print(f"[mousePressEvent] button={event.button()}, mode_3d={self.mode_3d}, tool={self._active_tool}")
         self.mouse_pressed = True
         self.last_mouse_pos = event.position()
         self.mouse_button = event.button()
@@ -11917,47 +14817,105 @@ void main() {{
             self._pick_color(event.position())
             self.color_picker_mode = False
             self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+            return
+
+        # Paint tool handling
+        if self._active_tool != "none" and event.button() == QtCore.Qt.MouseButton.LeftButton:
+            if self.mode_3d:
+                self._on_3d_paint_press(event.position(), modifiers=event.modifiers())
+            else:
+                self._on_paint_press(event.position(), modifiers=event.modifiers())
 
     def mouseReleaseEvent(self, event):
         """Handle mouse release."""
+        # Paint tool release
+        if self._active_tool != "none":
+            if self.mode_3d:
+                self._on_3d_paint_release()
+            else:
+                self._on_paint_release(event.position())
         self.mouse_pressed = False
         self.mouse_button = None
 
     def mouseMoveEvent(self, event):
-        """Handle mouse move for orbit/pan controls."""
+        """Handle mouse move for orbit/pan controls and paint tools."""
         if not self.mouse_pressed or self.last_mouse_pos is None:
             return
 
         if not self.mode_3d:
+            pos = event.position()
+            dx = pos.x() - self.last_mouse_pos.x()
+            dy = pos.y() - self.last_mouse_pos.y()
+            if self.mouse_button == QtCore.Qt.MouseButton.MiddleButton:
+                # 2D pan with middle mouse
+                dx_ndc = (dx / self.width()) * 2.0
+                dy_ndc = -(dy / self.height()) * 2.0
+                self.pan_2d_x += dx_ndc
+                self.pan_2d_y += dy_ndc
+                self.last_mouse_pos = pos
+                self.update()
+            elif self._active_tool != "none" and self.mouse_button == QtCore.Qt.MouseButton.LeftButton:
+                # Paint tool drag
+                self._on_paint_move(event.position())
             return
 
         pos = event.position()
         dx = pos.x() - self.last_mouse_pos.x()
         dy = pos.y() - self.last_mouse_pos.y()
 
-        if self.mouse_button == QtCore.Qt.MouseButton.LeftButton:
-            # Orbit rotation
-            self.rotation_y += dx * 0.5
-            self.rotation_x += dy * 0.5
-            self.rotation_x = max(-90, min(90, self.rotation_x))
-        elif self.mouse_button == QtCore.Qt.MouseButton.MiddleButton:
-            # Pan
-            self.pan_x += dx * 0.01
-            self.pan_y -= dy * 0.01
-        elif self.mouse_button == QtCore.Qt.MouseButton.RightButton:
-            # Zoom
-            self.zoom -= dy * 0.02
-            self.zoom = max(0.5, min(20.0, self.zoom))
+        # 3D paint drag (left button with active tool)
+        if self._active_tool != "none" and self.mouse_button == QtCore.Qt.MouseButton.LeftButton:
+            self._on_3d_paint_move(event.position())
+            self.last_mouse_pos = pos
+            return
+
+        if self.mouse_button == QtCore.Qt.MouseButton.MiddleButton:
+            modifiers = event.modifiers()
+            if modifiers & QtCore.Qt.KeyboardModifier.ShiftModifier:
+                # Shift+Middle = Pan (Blender style)
+                self.pan_x += dx * 0.01
+                self.pan_y -= dy * 0.01
+            else:
+                # Middle = Orbit (Blender style)
+                self.rotation_y += dx * 0.5
+                self.rotation_x += dy * 0.5
+                self.rotation_x = max(-90, min(90, self.rotation_x))
 
         self.last_mouse_pos = pos
         self.update()
+        if self.mode_3d:
+            self.cameraChanged.emit()
 
     def wheelEvent(self, event):
-        """Handle mouse wheel for zoom."""
+        """Handle mouse wheel for zoom (3D and 2D)."""
         if self.mode_3d:
             delta = event.angleDelta().y() / 120.0
-            self.zoom -= delta * 0.3
-            self.zoom = max(0.5, min(20.0, self.zoom))
+            shift = bool(event.modifiers() & QtCore.Qt.KeyboardModifier.ShiftModifier)
+            # Proportional zoom: step is a fraction of current distance
+            # Shift = fine-grained (5%), normal = fast (20%)
+            fraction = 0.05 if shift else 0.20
+            if delta > 0:
+                self.zoom *= (1.0 - fraction) ** delta   # zoom in
+            else:
+                self.zoom *= (1.0 + fraction) ** (-delta) # zoom out
+            max_zoom = max(20.0, self._initial_zoom * 3.0)
+            self.zoom = max(0.5, min(max_zoom, self.zoom))
+            self.update()
+            self.cameraChanged.emit()
+        else:
+            # 2D zoom toward cursor position
+            delta = event.angleDelta().y() / 120.0
+            zoom_factor = 1.15 ** delta
+            old_zoom = self.zoom_2d
+            self.zoom_2d *= zoom_factor
+            self.zoom_2d = max(1.0, min(64.0, self.zoom_2d))
+            # Zoom toward cursor: adjust pan so the point under cursor stays fixed
+            if self.zoom_2d != old_zoom:
+                mouse_ndc_x = (event.position().x() / self.width()) * 2.0 - 1.0
+                mouse_ndc_y = -((event.position().y() / self.height()) * 2.0 - 1.0)
+                ratio = 1.0 - old_zoom / self.zoom_2d
+                self.pan_2d_x += (mouse_ndc_x - self.pan_2d_x) * ratio
+                self.pan_2d_y += (mouse_ndc_y - self.pan_2d_y) * ratio
             self.update()
 
     def _pick_color(self, pos):
@@ -11977,6 +14935,1774 @@ void main() {{
         """Enable color picker mode."""
         self.color_picker_mode = True
         self.setCursor(QtCore.Qt.CursorShape.CrossCursor)
+
+    # --- PAINT TOOLS ---
+
+    def _widget_to_image_coords(self, widget_pos):
+        """Convert widget QPointF to image pixel coords (x, y), accounting for 2D zoom/pan."""
+        if self.image_size is None:
+            return None
+        img_w, img_h = self.image_size
+        w, h = self.width(), self.height()
+        if w <= 0 or h <= 0:
+            return None
+        # Convert widget position to NDC (-1..1)
+        ndc_x = (widget_pos.x() / w) * 2.0 - 1.0
+        ndc_y = -((widget_pos.y() / h) * 2.0 - 1.0)
+        # Invert vertex shader transform: screen_pos = in_vert * zoom + pan
+        # So: in_vert = (screen_pos - pan) / zoom
+        zoom = self.zoom_2d if self.zoom_2d > 0.0 else 1.0
+        vert_x = (ndc_x - self.pan_2d_x) / zoom
+        vert_y = (ndc_y - self.pan_2d_y) / zoom
+        # NDC vertex space (-1..1) to UV (0..1)
+        u = (vert_x + 1.0) / 2.0
+        v = (1.0 - vert_y) / 2.0  # flip Y: NDC +1=top, UV 0=top
+        # UV to pixel coords
+        ix = int(u * img_w)
+        iy = int(v * img_h)
+        ix = max(0, min(img_w - 1, ix))
+        iy = max(0, min(img_h - 1, iy))
+        return (ix, iy)
+
+    def _ensure_paint_surface(self):
+        """Ensure _paint_surface has the current rendered image. Bakes shader on first call."""
+        if self._paint_surface is not None:
+            return
+        self.makeCurrent()
+        w, h = self.image_size
+        image_data = self._export_2d_single(self.program, self.params, w, h)
+        if image_data is None:
+            return
+        self._paint_surface = image_data.copy()
+        self._upload_texture(np.ascontiguousarray(np.flipud(self._paint_surface)))
+        # Record bake in chain if not already Original with defaults
+        if self.current_preset != "Original":
+            entry = {'shader': self.current_preset, 'params': dict(self.params), 'enabled': True}
+            self._bake_chain.append(entry)
+        self.current_preset = "Original"
+        self._init_params()
+        self._compile_shader()
+
+    def _commit_paint_surface(self):
+        """Upload modified _paint_surface to GPU texture."""
+        if self._paint_surface is None:
+            return
+        self.makeCurrent()
+        self._upload_texture(np.ascontiguousarray(np.flipud(self._paint_surface)))
+        self.update()
+
+    def _push_paint_undo(self):
+        """Snapshot current paint surface and selection mask for undo."""
+        if self._paint_surface is None:
+            return
+        sel_copy = self._selection_mask.copy() if self._selection_mask is not None else None
+        self._paint_undo_stack.append((self._paint_surface.copy(), sel_copy))
+        if len(self._paint_undo_stack) > self._max_paint_undo:
+            self._paint_undo_stack.pop(0)
+        self._paint_redo_stack.clear()
+
+    def paint_undo(self):
+        """Undo last paint/selection operation. Returns True if successful."""
+        if not self._paint_undo_stack:
+            return False
+        if self._paint_surface is not None:
+            sel_copy = self._selection_mask.copy() if self._selection_mask is not None else None
+            self._paint_redo_stack.append((self._paint_surface.copy(), sel_copy))
+        entry = self._paint_undo_stack.pop()
+        # Support both old format (just array) and new format (array, mask)
+        if isinstance(entry, tuple):
+            self._paint_surface, self._selection_mask = entry
+        else:
+            self._paint_surface = entry
+        if self._selection_mask is not None:
+            self._update_selection_display()
+        else:
+            self._commit_paint_surface()
+        return True
+
+    def paint_redo(self):
+        """Redo last undone paint/selection operation. Returns True if successful."""
+        if not self._paint_redo_stack:
+            return False
+        if self._paint_surface is not None:
+            sel_copy = self._selection_mask.copy() if self._selection_mask is not None else None
+            self._paint_undo_stack.append((self._paint_surface.copy(), sel_copy))
+        entry = self._paint_redo_stack.pop()
+        # Support both old format (just array) and new format (array, mask)
+        if isinstance(entry, tuple):
+            self._paint_surface, self._selection_mask = entry
+        else:
+            self._paint_surface = entry
+        if self._selection_mask is not None:
+            self._update_selection_display()
+        else:
+            self._commit_paint_surface()
+        return True
+
+    def _clear_paint_state(self):
+        """Reset all paint tool state (called on new image load)."""
+        self._paint_surface = None
+        self._selection_mask = None
+        self._stroke_start = None
+        self._stroke_current = None
+        self._stroke_preview = None
+        self._paint_undo_stack.clear()
+        self._paint_redo_stack.clear()
+
+    # --- Paint event dispatch ---
+
+    def _on_paint_press(self, widget_pos, modifiers=None):
+        """Handle mouse press for active paint tool using dispatch."""
+        coords = self._widget_to_image_coords(widget_pos)
+        if coords is None:
+            return
+        self._ensure_paint_surface()
+        if self._paint_surface is None:
+            return
+
+        # Store modifiers so selection tools can check for Shift (additive select)
+        self._press_modifiers = modifiers
+
+        # Alt+click for eyedropper from any tool
+        if modifiers and modifiers & QtCore.Qt.KeyboardModifier.AltModifier:
+            if self._active_tool == "clone":
+                self._clone_source = coords
+                self._clone_offset = None
+                return
+            else:
+                self._press_eyedropper(coords)
+                return
+
+        # Stabilizer reset
+        self._stabilizer_points.clear()
+
+        dispatch = {
+            "pencil": self._press_pencil,
+            "eraser": self._press_pencil,
+            "fill": self._press_fill,
+            "bg_erase": self._press_bg_erase,
+            "wand": self._press_wand,
+            "line": self._press_shape,
+            "rect": self._press_shape,
+            "ellipse": self._press_shape,
+            "polygon": self._press_shape,
+            "eyedropper": self._press_eyedropper,
+            "smudge": self._press_smudge,
+            "clone": self._press_clone,
+            "blur_brush": self._press_pencil,
+            "dodge_burn": self._press_pencil,
+            "text": self._press_text,
+            "gradient": self._press_gradient,
+            "select_rect": self._press_selection,
+            "lasso": self._press_lasso,
+            "transform": self._press_transform,
+            "crop": self._press_crop,
+            "liquify": self._press_liquify,
+            "pen": self._press_pen,
+        }
+        handler = dispatch.get(self._active_tool)
+        if handler:
+            handler(coords)
+
+    def _on_paint_move(self, widget_pos):
+        """Handle mouse move for active paint tool using dispatch."""
+        coords = self._widget_to_image_coords(widget_pos)
+        if coords is None:
+            return
+        coords = self._stabilize_coords(coords)
+
+        dispatch = {
+            "pencil": self._move_pencil,
+            "eraser": self._move_pencil,
+            "line": self._move_shape,
+            "rect": self._move_shape,
+            "ellipse": self._move_shape,
+            "polygon": self._move_shape,
+            "smudge": self._move_smudge,
+            "clone": self._move_clone,
+            "blur_brush": self._move_blur,
+            "dodge_burn": self._move_dodge_burn,
+            "gradient": self._move_gradient,
+            "select_rect": self._move_selection,
+            "lasso": self._move_lasso,
+            "transform": self._move_transform,
+            "crop": self._move_crop,
+            "liquify": self._move_liquify,
+        }
+        handler = dispatch.get(self._active_tool)
+        if handler:
+            handler(coords)
+
+    def _on_paint_release(self, widget_pos):
+        """Handle mouse release for active paint tool using dispatch."""
+        coords = self._widget_to_image_coords(widget_pos)
+
+        dispatch = {
+            "line": self._release_shape,
+            "rect": self._release_shape,
+            "ellipse": self._release_shape,
+            "polygon": self._release_shape,
+            "gradient": self._release_gradient,
+            "select_rect": self._release_selection,
+            "lasso": self._release_lasso,
+            "transform": self._release_transform,
+            "crop": self._release_crop,
+            "smudge": self._release_generic,
+            "clone": self._release_generic,
+            "blur_brush": self._release_generic,
+            "dodge_burn": self._release_generic,
+            "liquify": self._release_generic,
+        }
+        handler = dispatch.get(self._active_tool)
+        if handler:
+            handler(coords)
+        else:
+            self._stroke_start = None
+            self._stroke_current = None
+
+        # Stop airbrush timer if running
+        if self._airbrush_timer and self._airbrush_timer.isActive():
+            self._airbrush_timer.stop()
+
+    # --- 3D Paint-on-Model: Drawing & Event Handlers ---
+
+    def _uv_to_paint_coords(self, u, v):
+        """Convert UV (0-1) to pixel coords on the 3D paint texture."""
+        tw, th = self._3d_paint_tex_size
+        px = max(0, min(tw - 1, int(u * tw)))
+        py = max(0, min(th - 1, int(v * th)))
+        return (px, py)
+
+    def _draw_brush_at_3d_screen(self, widget_pos, color=None):
+        """Stamp brush by projecting through screen space — only paints visible surfaces.
+
+        Reads the UV buffer region around the cursor (brush-sized area) and
+        paints only at UV coordinates that are actually visible on screen,
+        preventing paint from bleeding to overlapping UV islands.
+        """
+        if self._3d_uv_fbo is None or self._3d_paint_texture is None:
+            return
+        pressure = self._tablet_pressure
+
+        # Pressure-based size scaling
+        if self._pressure_affects_size and pressure < 1.0:
+            scale = self._pressure_min_size + (1.0 - self._pressure_min_size) * pressure
+            r = max(1, int(self._brush_radius * scale))
+            kernel = self._make_brush_kernel(radius=r)
+        else:
+            r = self._brush_radius
+            kernel = self._make_brush_kernel()
+
+        if color is None:
+            if self._active_tool == "eraser":
+                color = np.array([0, 0, 0, 0], dtype=np.uint8)
+            else:
+                pc = self._jitter_color() if (self._hue_jitter > 0 or self._sat_jitter > 0 or self._val_jitter > 0) else self._paint_color
+                color = np.array(pc, dtype=np.uint8)
+        elif not isinstance(color, np.ndarray):
+            color = np.array(color, dtype=np.uint8)
+
+        # Read a brush-sized region of the UV buffer in screen space
+        ratio = self.devicePixelRatio()
+        cx = int(widget_pos.x() * ratio)
+        cy = int((self.height() - widget_pos.y()) * ratio)  # GL coords (y-flipped)
+        fb_w, fb_h = self._3d_uv_fbo_size
+        diameter = r * 2 + 1
+
+        # Clamp read region to FBO bounds
+        rx0 = max(0, cx - r)
+        ry0 = max(0, cy - r)
+        rx1 = min(fb_w, cx + r + 1)
+        ry1 = min(fb_h, cy + r + 1)
+        rw = rx1 - rx0
+        rh = ry1 - ry0
+        if rw <= 0 or rh <= 0:
+            return
+
+        qt_fbo = self.defaultFramebufferObject()
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, self._3d_uv_fbo)
+        raw = GL.glReadPixels(rx0, ry0, rw, rh, GL.GL_RGBA, GL.GL_FLOAT)
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, qt_fbo)
+
+        if raw is None:
+            return
+        uv_data = np.frombuffer(raw, dtype=np.float32).reshape(rh, rw, 4)
+
+        # Kernel region matching the clamped area
+        k_y0 = ry0 - (cy - r)
+        k_x0 = rx0 - (cx - r)
+        k_region = kernel[k_y0:k_y0 + rh, k_x0:k_x0 + rw]
+
+        # Pressure-based opacity scaling
+        opacity = self._brush_opacity / 255.0
+        if self._pressure_affects_opacity and pressure < 1.0:
+            opacity *= pressure
+
+        tw, th = self._3d_paint_tex_size
+        color_f = color.astype(np.float32)
+        paint = self._3d_paint_texture
+
+        # For each pixel in the read region, if it's on the model, paint at its UV
+        mat_channel = uv_data[:, :, 2]
+        valid = (mat_channel > 0.001)  # Non-background pixels
+        valid_ys, valid_xs = np.where(valid)
+
+        for i in range(len(valid_ys)):
+            sy, sx = valid_ys[i], valid_xs[i]
+            u = float(uv_data[sy, sx, 0])
+            v = float(uv_data[sy, sx, 1])
+            px = max(0, min(tw - 1, int(u * tw)))
+            py = max(0, min(th - 1, int(v * th)))
+            a = float(k_region[sy, sx]) * opacity
+            if a <= 0:
+                continue
+            old = paint[py, px].astype(np.float32)
+            paint[py, px] = (color_f * a + old * (1.0 - a)).astype(np.uint8)
+
+    def _draw_brush_at_3d(self, coords, color=None, kernel=None):
+        """Stamp a brush on the 3D paint texture at UV-space pixel coords (x, y).
+        Fallback for non-screen-projected painting (shape tools, line interpolation)."""
+        x, y = coords
+        pressure = self._tablet_pressure
+
+        # Pressure-based size scaling
+        if self._pressure_affects_size and pressure < 1.0:
+            scale = self._pressure_min_size + (1.0 - self._pressure_min_size) * pressure
+            r = max(1, int(self._brush_radius * scale))
+            if kernel is None:
+                kernel = self._make_brush_kernel(radius=r)
+        else:
+            r = self._brush_radius
+            if kernel is None:
+                kernel = self._make_brush_kernel()
+
+        h, w = self._3d_paint_texture.shape[:2]
+        y0 = max(0, y - r)
+        y1 = min(h, y + r + 1)
+        x0 = max(0, x - r)
+        x1 = min(w, x + r + 1)
+        if y0 >= y1 or x0 >= x1:
+            return
+
+        # Slice kernel to match clamped region
+        ky0, ky1 = y0 - (y - r), y1 - (y - r)
+        kx0, kx1 = x0 - (x - r), x1 - (x - r)
+        k = kernel[ky0:ky1, kx0:kx1]
+
+        if color is None:
+            if self._active_tool == "eraser":
+                color = np.array([0, 0, 0, 0], dtype=np.uint8)
+            else:
+                pc = self._jitter_color() if (self._hue_jitter > 0 or self._sat_jitter > 0 or self._val_jitter > 0) else self._paint_color
+                color = np.array(pc, dtype=np.uint8)
+        elif not isinstance(color, np.ndarray):
+            color = np.array(color, dtype=np.uint8)
+
+        # Pressure-based opacity scaling
+        opacity = self._brush_opacity / 255.0
+        if self._pressure_affects_opacity and pressure < 1.0:
+            opacity *= pressure
+        alpha = k * opacity
+
+        region = self._3d_paint_texture[y0:y1, x0:x1].astype(np.float32)
+        color_f = color.astype(np.float32)
+        for c in range(4):
+            region[:, :, c] = alpha * color_f[c] + (1.0 - alpha) * region[:, :, c]
+        self._3d_paint_texture[y0:y1, x0:x1] = region.astype(np.uint8)
+
+    def _draw_line_between_3d_screen(self, pos0, pos1):
+        """Interpolate brush stamps between two screen positions, using screen-projected painting.
+
+        This samples the UV buffer at intermediate screen positions so each stamp
+        only affects the visible surface at that point — no UV overlap bleeding.
+        """
+        dx = pos1.x() - pos0.x()
+        dy = pos1.y() - pos0.y()
+        dist = math.sqrt(dx * dx + dy * dy)
+        step = max(1, int(self._brush_radius * 2 * self._brush_spacing))
+        if dist < 1:
+            self._draw_brush_at_3d_screen(pos0)
+            return
+        steps = max(1, int(dist / step))
+        for i in range(steps + 1):
+            t = i / max(steps, 1)
+            px = pos0.x() + dx * t
+            py = pos0.y() + dy * t
+            if self._brush_scatter > 0:
+                jitter = self._brush_scatter * self._brush_radius
+                px += random.uniform(-jitter, jitter)
+                py += random.uniform(-jitter, jitter)
+            pt = QtCore.QPointF(px, py)
+            self._draw_brush_at_3d_screen(pt)
+
+    def _draw_line_between_3d(self, p0, p1, kernel=None):
+        """Interpolate brush stamps between two UV-space pixel coords on 3D paint texture."""
+        if kernel is None:
+            kernel = self._make_brush_kernel()
+        x0, y0 = p0
+        x1, y1 = p1
+        dx, dy = x1 - x0, y1 - y0
+        dist = math.sqrt(dx * dx + dy * dy)
+        step = max(1, int(self._brush_radius * 2 * self._brush_spacing))
+        if dist < 1:
+            self._draw_brush_at_3d((x0, y0), kernel=kernel)
+            return
+        steps = max(1, int(dist / step))
+        for i in range(steps + 1):
+            t = i / max(steps, 1)
+            px = int(x0 + dx * t)
+            py = int(y0 + dy * t)
+            if self._brush_scatter > 0:
+                jitter = self._brush_scatter * self._brush_radius
+                px += int(random.uniform(-jitter, jitter))
+                py += int(random.uniform(-jitter, jitter))
+            self._draw_brush_at_3d((px, py), kernel=kernel)
+
+    def _draw_rect_3d(self, p0, p1):
+        """Draw a rectangle on the 3D paint texture between two UV-space pixel coords."""
+        x0, y0 = min(p0[0], p1[0]), min(p0[1], p1[1])
+        x1, y1 = max(p0[0], p1[0]), max(p0[1], p1[1])
+        h, w = self._3d_paint_texture.shape[:2]
+        x0, y0 = max(0, x0), max(0, y0)
+        x1, y1 = min(w - 1, x1), min(h - 1, y1)
+        if self._active_tool == "eraser":
+            color = np.array([0, 0, 0, 0], dtype=np.uint8)
+        else:
+            color = np.array(self._paint_color, dtype=np.uint8)
+        if getattr(self, '_fill_mode', 'filled') == "filled":
+            self._3d_paint_texture[y0:y1 + 1, x0:x1 + 1] = color
+        else:
+            kernel = self._make_brush_kernel()
+            self._draw_line_between_3d((x0, y0), (x1, y0), kernel=kernel)
+            self._draw_line_between_3d((x0, y1), (x1, y1), kernel=kernel)
+            self._draw_line_between_3d((x0, y0), (x0, y1), kernel=kernel)
+            self._draw_line_between_3d((x1, y0), (x1, y1), kernel=kernel)
+
+    def _draw_ellipse_3d(self, p0, p1):
+        """Draw an ellipse on the 3D paint texture inscribed in the rect from p0 to p1."""
+        x0, y0 = min(p0[0], p1[0]), min(p0[1], p1[1])
+        x1, y1 = max(p0[0], p1[0]), max(p0[1], p1[1])
+        h, w = self._3d_paint_texture.shape[:2]
+        cx = (x0 + x1) / 2.0
+        cy = (y0 + y1) / 2.0
+        rx = (x1 - x0) / 2.0
+        ry = (y1 - y0) / 2.0
+        if rx <= 0 or ry <= 0:
+            return
+        if self._active_tool == "eraser":
+            color = np.array([0, 0, 0, 0], dtype=np.uint8)
+        else:
+            color = np.array(self._paint_color, dtype=np.uint8)
+        ey0 = max(0, y0)
+        ey1 = min(h, y1 + 1)
+        ex0 = max(0, x0)
+        ex1 = min(w, x1 + 1)
+        ys, xs = np.mgrid[ey0:ey1, ex0:ex1]
+        dist = ((xs - cx) / rx) ** 2 + ((ys - cy) / ry) ** 2
+        if getattr(self, '_fill_mode', 'filled') == "filled":
+            mask = dist <= 1.0
+            self._3d_paint_texture[ey0:ey1, ex0:ex1][mask] = color
+        else:
+            # Outline only — draw where distance is near 1.0
+            brush_w = max(1, self._brush_radius) / max(rx, ry)
+            mask = (dist >= (1.0 - brush_w) ** 2) & (dist <= 1.0)
+            self._3d_paint_texture[ey0:ey1, ex0:ex1][mask] = color
+
+    def _on_3d_paint_press(self, widget_pos, modifiers=None):
+        """Handle mouse press for painting on 3D model."""
+        # Alt+click = eyedropper (pick color from rendered surface)
+        if modifiers and modifiers & QtCore.Qt.KeyboardModifier.AltModifier:
+            self._pick_color(widget_pos)
+            return
+
+        self.makeCurrent()
+        self._ensure_3d_paint_texture()
+        if self._3d_paint_texture is None:
+            return
+
+        # Render UV buffer for this camera angle (reused for entire stroke)
+        ratio = self.devicePixelRatio()
+        w, h = int(self.width() * ratio), int(self.height() * ratio)
+        self._render_uv_buffer(w, h)
+        pick = self._pick_uv_at(widget_pos)
+        if pick is None:
+            return
+        u, v, mat_idx = pick
+
+        self._push_3d_paint_undo()
+        self._3d_stroke_active = True
+        self._3d_stroke_last_uv = (u, v)
+        self._3d_stroke_mat_idx = mat_idx
+        self._3d_stroke_start_uv = (u, v)  # For shape tools
+        self._3d_stroke_last_screen_pos = QtCore.QPointF(widget_pos.x(), widget_pos.y())
+
+        tool = self._active_tool
+        if tool in ("line", "rect", "ellipse"):
+            # Shape tools: just record start, draw on release
+            return
+
+        # Pencil / eraser: stamp via screen-projected brush (prevents UV overlap bleeding)
+        self._draw_brush_at_3d_screen(widget_pos)
+        self._commit_3d_paint()
+
+    def _on_3d_paint_move(self, widget_pos):
+        """Handle mouse drag for painting on 3D model."""
+        if not self._3d_stroke_active:
+            return
+
+        tool = self._active_tool
+        if tool in ("line", "rect", "ellipse"):
+            # Shape tools: just track end position, draw on release
+            pick = self._pick_uv_at(widget_pos)
+            if pick is not None:
+                u, v, _mat = pick
+                self._3d_stroke_last_uv = (u, v)
+            return
+
+        # Pencil / eraser: continuous stroke via screen-projected brush
+        last_pos = getattr(self, '_3d_stroke_last_screen_pos', None)
+        current_pos = QtCore.QPointF(widget_pos.x(), widget_pos.y())
+        if last_pos is not None:
+            self._draw_line_between_3d_screen(last_pos, current_pos)
+        else:
+            self._draw_brush_at_3d_screen(widget_pos)
+        self._3d_stroke_last_screen_pos = current_pos
+        self._commit_3d_paint()
+
+    def _on_3d_paint_release(self):
+        """Handle mouse release for 3D painting."""
+        if self._3d_stroke_active:
+            tool = self._active_tool
+            start_uv = getattr(self, '_3d_stroke_start_uv', None)
+            end_uv = self._3d_stroke_last_uv
+            if tool in ("line", "rect", "ellipse") and start_uv and end_uv:
+                start_px = self._uv_to_paint_coords(*start_uv)
+                end_px = self._uv_to_paint_coords(*end_uv)
+                if tool == "line":
+                    kernel = self._make_brush_kernel()
+                    self._draw_line_between_3d(start_px, end_px, kernel=kernel)
+                elif tool == "rect":
+                    self._draw_rect_3d(start_px, end_px)
+                elif tool == "ellipse":
+                    self._draw_ellipse_3d(start_px, end_px)
+                self._commit_3d_paint()
+
+        self._3d_stroke_active = False
+        self._3d_stroke_mat_idx = -1
+        self._3d_stroke_last_uv = None
+        self._3d_stroke_start_uv = None
+
+    # --- 3D Paint Undo/Redo ---
+
+    def _push_3d_paint_undo(self):
+        """Snapshot 3D paint texture for undo."""
+        if self._3d_paint_texture is None:
+            return
+        self._3d_paint_undo_stack.append(self._3d_paint_texture.copy())
+        if len(self._3d_paint_undo_stack) > self._max_3d_paint_undo:
+            self._3d_paint_undo_stack.pop(0)
+        self._3d_paint_redo_stack.clear()
+
+    def paint_undo_3d(self):
+        """Undo 3D paint stroke."""
+        if not self._3d_paint_undo_stack:
+            return False
+        if self._3d_paint_texture is not None:
+            self._3d_paint_redo_stack.append(self._3d_paint_texture.copy())
+        self._3d_paint_texture = self._3d_paint_undo_stack.pop()
+        self._commit_3d_paint()
+        return True
+
+    def paint_redo_3d(self):
+        """Redo 3D paint stroke."""
+        if not self._3d_paint_redo_stack:
+            return False
+        if self._3d_paint_texture is not None:
+            self._3d_paint_undo_stack.append(self._3d_paint_texture.copy())
+        self._3d_paint_texture = self._3d_paint_redo_stack.pop()
+        self._commit_3d_paint()
+        return True
+
+    def reset_3d_paint(self):
+        """Clear paint and restore original model textures and base_colors."""
+        if self._3d_paint_texture is None and not self._3d_original_tex_data:
+            return
+        self.makeCurrent()
+        # Restore original textures on GPU
+        for mat_idx, original in self._3d_original_tex_data.items():
+            if self._material_texture_ids:
+                gl_tex = self._material_texture_ids.get(mat_idx)
+            else:
+                gl_tex = self.texture_id
+            if gl_tex is not None:
+                GL.glBindTexture(GL.GL_TEXTURE_2D, gl_tex)
+                h, w = original.shape[:2]
+                GL.glTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, 0, w, h,
+                                   GL.GL_RGBA, GL.GL_UNSIGNED_BYTE,
+                                   np.ascontiguousarray(original))
+        # Restore original base_colors that were set to white for painting
+        for mat_idx, bc in self._3d_original_base_colors.items():
+            if mat_idx < len(self._gltf_materials):
+                self._gltf_materials[mat_idx]["base_color"] = list(bc)
+        # Delete GL textures we created for untextured materials
+        for mat_idx in list(self._3d_original_base_colors.keys()):
+            gl_tex = self._material_texture_ids.pop(mat_idx, None)
+            if gl_tex is not None:
+                try:
+                    GL.glDeleteTextures([gl_tex])
+                except Exception:
+                    pass
+        self._3d_original_base_colors.clear()
+        self._3d_paint_texture = None
+        self._3d_original_tex_data.clear()
+        self._3d_paint_undo_stack.clear()
+        self._3d_paint_redo_stack.clear()
+        self._3d_stroke_active = False
+        self._3d_stroke_last_uv = None
+        self._3d_stroke_mat_idx = -1
+        self.update()
+
+    # --- Per-tool press/move/release handlers ---
+
+    def _press_pencil(self, coords):
+        self._push_paint_undo()
+        self._stroke_start = coords
+        self._stroke_current = coords
+        kernel = self._make_brush_kernel()
+        if self._active_tool == "blur_brush":
+            self._draw_blur_at(coords)
+        elif self._active_tool == "dodge_burn":
+            self._draw_dodge_burn_at(coords)
+        else:
+            self._draw_brush_at_symmetry(coords, kernel=kernel)
+        self._commit_paint_surface()
+
+    def _move_pencil(self, coords):
+        if self._stroke_current is not None:
+            self._draw_line_between(self._stroke_current, coords)
+        self._stroke_current = coords
+        self._commit_paint_surface()
+
+    def _press_fill(self, coords):
+        self._push_paint_undo()
+        if self._gradient_type != "none" and self._active_tool == "gradient":
+            self._press_gradient(coords)
+        else:
+            self._flood_fill(coords)
+            self._commit_paint_surface()
+
+    def _press_bg_erase(self, coords):
+        self._push_paint_undo()
+        self._flood_fill_transparent(coords)
+        self._commit_paint_surface()
+
+    def _press_wand(self, coords):
+        self._magic_wand_select(coords)
+
+    def _press_shape(self, coords):
+        self._push_paint_undo()
+        self._stroke_start = coords
+        self._stroke_current = coords
+        self._stroke_preview = self._paint_surface.copy()
+
+    def _move_shape(self, coords):
+        if self._stroke_preview is not None and self._stroke_start is not None:
+            self._paint_surface[:] = self._stroke_preview
+            if self._active_tool == "polygon":
+                self._draw_polygon_shape(self._stroke_start, coords)
+            else:
+                self._draw_shape(self._stroke_start, coords)
+            self._commit_paint_surface()
+
+    def _release_shape(self, coords):
+        if self._stroke_preview is not None and self._stroke_start is not None:
+            end = coords if coords else self._stroke_current
+            self._paint_surface[:] = self._stroke_preview
+            if self._active_tool == "polygon":
+                self._draw_polygon_shape(self._stroke_start, end)
+            else:
+                self._draw_shape(self._stroke_start, end)
+            self._commit_paint_surface()
+            self._stroke_preview = None
+        self._stroke_start = None
+        self._stroke_current = None
+
+    def _release_generic(self, coords):
+        self._stroke_start = None
+        self._stroke_current = None
+
+    # --- Liquify tool handlers ---
+    def _press_liquify(self, coords):
+        self._push_paint_undo()
+        self._stroke_start = coords
+        self._stroke_current = coords
+
+    def _move_liquify(self, coords):
+        """Liquify brush: push/expand/contract/twirl pixels around cursor."""
+        if self._stroke_current is None or self._paint_surface is None:
+            return
+        x, y = coords
+        ox, oy = self._stroke_current
+        dx, dy = x - ox, y - oy
+        self._stroke_current = coords
+
+        h, w = self._paint_surface.shape[:2]
+        r = self._liquify_radius
+        strength = self._liquify_strength * self._tablet_pressure
+
+        y0, y1 = max(0, y - r), min(h, y + r + 1)
+        x0, x1 = max(0, x - r), min(w, x + r + 1)
+        if y0 >= y1 or x0 >= x1:
+            return
+
+        # Build displacement field for the region
+        yy, xx = np.mgrid[y0:y1, x0:x1]
+        dist = np.sqrt((xx - x) ** 2 + (yy - y) ** 2).astype(np.float64)
+        falloff = np.clip(1.0 - dist / max(r, 1), 0.0, 1.0) ** 2  # quadratic falloff
+        falloff *= strength
+
+        mode = self._liquify_mode
+        if mode == "push":
+            # Push pixels in drag direction
+            src_x = (xx - dx * falloff).astype(np.float64)
+            src_y = (yy - dy * falloff).astype(np.float64)
+        elif mode == "expand":
+            rel_x = (xx - x).astype(np.float64)
+            rel_y = (yy - y).astype(np.float64)
+            src_x = x + rel_x * (1.0 + falloff * 0.3)
+            src_y = y + rel_y * (1.0 + falloff * 0.3)
+        elif mode == "contract":
+            rel_x = (xx - x).astype(np.float64)
+            rel_y = (yy - y).astype(np.float64)
+            src_x = x + rel_x * (1.0 - falloff * 0.3)
+            src_y = y + rel_y * (1.0 - falloff * 0.3)
+        elif mode == "twirl_cw":
+            rel_x = (xx - x).astype(np.float64)
+            rel_y = (yy - y).astype(np.float64)
+            angle = falloff * 0.3
+            cos_a, sin_a = np.cos(angle), np.sin(angle)
+            src_x = x + rel_x * cos_a - rel_y * sin_a
+            src_y = y + rel_x * sin_a + rel_y * cos_a
+        elif mode == "twirl_ccw":
+            rel_x = (xx - x).astype(np.float64)
+            rel_y = (yy - y).astype(np.float64)
+            angle = -falloff * 0.3
+            cos_a, sin_a = np.cos(angle), np.sin(angle)
+            src_x = x + rel_x * cos_a - rel_y * sin_a
+            src_y = y + rel_x * sin_a + rel_y * cos_a
+        else:
+            return
+
+        # Clamp source coords
+        src_x = np.clip(src_x, 0, w - 1).astype(np.int32)
+        src_y = np.clip(src_y, 0, h - 1).astype(np.int32)
+
+        # Sample pixels from source positions
+        self._paint_surface[y0:y1, x0:x1] = self._paint_surface[src_y, src_x]
+        self._commit_paint_surface()
+
+    # --- Pen tool handlers (vector paths) ---
+    def _press_pen(self, coords):
+        """Add a point to the current pen path. Click to add points, double-click to finish."""
+        x, y = coords
+        self._pen_points.append((x, y))
+
+        # Find or create the active vector layer
+        if self._pen_active_layer is None:
+            # Find topmost vector layer, or create one
+            for i in range(len(self._layers) - 1, -1, -1):
+                if self._layers[i].get('type') == 'vector':
+                    self._pen_active_layer = i
+                    break
+            if self._pen_active_layer is None:
+                layer = self.add_vector_layer()
+                self._pen_active_layer = len(self._layers) - 1
+
+        # Visual feedback: draw temporary preview of the path
+        if len(self._pen_points) >= 2:
+            # Commit path after 2+ clicks — user will double-click or press Enter to finish
+            pass
+
+    def _finish_pen_path(self):
+        """Finalize the current pen path and add it to the active vector layer."""
+        if len(self._pen_points) < 2:
+            self._pen_points = []
+            return
+        idx = self._pen_active_layer
+        if idx is None or idx >= len(self._layers):
+            self._pen_points = []
+            return
+        stroke_color = self._paint_color
+        self.add_vector_path(
+            idx,
+            points=[(p[0], p[1]) for p in self._pen_points],
+            closed=self._pen_closed,
+            stroke_color=stroke_color,
+            stroke_width=self._pen_stroke_width,
+        )
+        self._pen_points = []
+        self._pen_active_layer = None
+
+    def _press_eyedropper(self, coords):
+        """Pick color from canvas at coords."""
+        color = self._sample_color_at(coords)
+        self._paint_color = color
+        self.colorPicked.emit(color[0], color[1], color[2], color[3])
+
+    def _press_smudge(self, coords):
+        self._push_paint_undo()
+        x, y = coords
+        self._smudge_color = self._paint_surface[y, x].copy().astype(np.float32)
+        self._stroke_current = coords
+
+    def _move_smudge(self, coords):
+        if self._stroke_current is None or self._smudge_color is None:
+            return
+        x, y = coords
+        r = self._brush_radius
+        kernel = self._make_brush_kernel()
+        h, w = self._paint_surface.shape[:2]
+        y0, y1 = max(0, y - r), min(h, y + r + 1)
+        x0, x1 = max(0, x - r), min(w, x + r + 1)
+        ky0, ky1 = y0 - (y - r), y1 - (y - r)
+        kx0, kx1 = x0 - (x - r), x1 - (x - r)
+        k = kernel[ky0:ky1, kx0:kx1]
+        if self._selection_mask is not None:
+            k = k * self._selection_mask[y0:y1, x0:x1].astype(np.float32)
+        strength = self._brush_opacity / 255.0
+        region = self._paint_surface[y0:y1, x0:x1].astype(np.float32)
+        alpha = k[:, :, np.newaxis] * strength
+        blended = alpha * self._smudge_color + (1 - alpha) * region
+        self._paint_surface[y0:y1, x0:x1] = blended.astype(np.uint8)
+        # Update smudge color from center pixel (pick up and smear)
+        cy, cx = min(y, h - 1), min(x, w - 1)
+        center_color = self._paint_surface[cy, cx].astype(np.float32)
+        self._smudge_color = 0.5 * self._smudge_color + 0.5 * center_color
+        self._stroke_current = coords
+        self._commit_paint_surface()
+
+    def _press_clone(self, coords):
+        if self._clone_source is None:
+            return
+        self._push_paint_undo()
+        if self._clone_offset is None:
+            self._clone_offset = (coords[0] - self._clone_source[0],
+                                  coords[1] - self._clone_source[1])
+        self._stroke_current = coords
+        self._draw_clone_at(coords)
+        self._commit_paint_surface()
+
+    def _move_clone(self, coords):
+        if self._stroke_current is None or self._clone_offset is None:
+            return
+        self._draw_clone_at(coords)
+        self._stroke_current = coords
+        self._commit_paint_surface()
+
+    def _draw_clone_at(self, coords):
+        """Paint pixels from clone source to target through brush kernel."""
+        x, y = coords
+        sx = x - self._clone_offset[0]
+        sy = y - self._clone_offset[1]
+        r = self._brush_radius
+        h, w = self._paint_surface.shape[:2]
+        kernel = self._make_brush_kernel()
+        # Target bounds
+        ty0, ty1 = max(0, y - r), min(h, y + r + 1)
+        tx0, tx1 = max(0, x - r), min(w, x + r + 1)
+        # Source bounds (must be within image)
+        sy0, sy1 = ty0 - y + sy, ty1 - y + sy
+        sx0, sx1 = tx0 - x + sx, tx1 - x + sx
+        # Clamp source to image bounds
+        if sy0 < 0 or sx0 < 0 or sy1 > h or sx1 > w:
+            return
+        ky0, ky1 = ty0 - (y - r), ty1 - (y - r)
+        kx0, kx1 = tx0 - (x - r), tx1 - (x - r)
+        k = kernel[ky0:ky1, kx0:kx1]
+        if self._selection_mask is not None:
+            k = k * self._selection_mask[ty0:ty1, tx0:tx1].astype(np.float32)
+        source_pixels = self._paint_surface[sy0:sy1, sx0:sx1].copy()
+        alpha = k[:, :, np.newaxis] * (self._brush_opacity / 255.0)
+        target = self._paint_surface[ty0:ty1, tx0:tx1].astype(np.float32)
+        blended = alpha * source_pixels.astype(np.float32) + (1 - alpha) * target
+        self._paint_surface[ty0:ty1, tx0:tx1] = blended.astype(np.uint8)
+
+    def _move_blur(self, coords):
+        if self._stroke_current is not None:
+            self._draw_blur_at(coords)
+        self._stroke_current = coords
+        self._commit_paint_surface()
+
+    def _draw_blur_at(self, coords):
+        """Apply blur or sharpen at brush position."""
+        x, y = coords
+        r = self._brush_radius
+        h, w = self._paint_surface.shape[:2]
+        y0, y1 = max(0, y - r), min(h, y + r + 1)
+        x0, x1 = max(0, x - r), min(w, x + r + 1)
+        region = self._paint_surface[y0:y1, x0:x1].copy().astype(np.float32)
+        kr = min(self._blur_strength, r)
+        blurred = self._box_blur_region(region, kr)
+        if self._sharpen_mode:
+            sharpened = region + (region - blurred) * 1.5
+            blurred = np.clip(sharpened, 0, 255)
+        kernel = self._make_brush_kernel()
+        ky0, ky1 = y0 - (y - r), y1 - (y - r)
+        kx0, kx1 = x0 - (x - r), x1 - (x - r)
+        k = kernel[ky0:ky1, kx0:kx1][:, :, np.newaxis]
+        if self._selection_mask is not None:
+            sel = self._selection_mask[y0:y1, x0:x1].astype(np.float32)[:, :, np.newaxis]
+            k = k * sel
+        alpha = k * (self._brush_opacity / 255.0)
+        result = alpha * blurred + (1 - alpha) * region
+        self._paint_surface[y0:y1, x0:x1] = result.astype(np.uint8)
+
+    def _move_dodge_burn(self, coords):
+        if self._stroke_current is not None:
+            self._draw_dodge_burn_at(coords)
+        self._stroke_current = coords
+        self._commit_paint_surface()
+
+    def _draw_dodge_burn_at(self, coords):
+        """Apply dodge (lighten) or burn (darken) at brush position."""
+        x, y = coords
+        r = self._brush_radius
+        h, w = self._paint_surface.shape[:2]
+        y0, y1 = max(0, y - r), min(h, y + r + 1)
+        x0, x1 = max(0, x - r), min(w, x + r + 1)
+        kernel = self._make_brush_kernel()
+        ky0, ky1 = y0 - (y - r), y1 - (y - r)
+        kx0, kx1 = x0 - (x - r), x1 - (x - r)
+        k = kernel[ky0:ky1, kx0:kx1]
+        if self._selection_mask is not None:
+            k = k * self._selection_mask[y0:y1, x0:x1].astype(np.float32)
+        exposure = self._dodge_burn_exposure
+        region = self._paint_surface[y0:y1, x0:x1].astype(np.float32)
+        target = 255.0 if self._dodge_burn_mode == "dodge" else 0.0
+        strength = k * exposure * (self._brush_opacity / 255.0)
+        for c in range(3):  # RGB only, not alpha
+            region[:, :, c] = region[:, :, c] + strength * (target - region[:, :, c])
+        self._paint_surface[y0:y1, x0:x1] = np.clip(region, 0, 255).astype(np.uint8)
+
+    def _press_text(self, coords):
+        """Place text at the clicked position."""
+        self._push_paint_undo()
+        self._text_position = coords
+        self._render_text(coords)
+        self._commit_paint_surface()
+
+    def _render_text(self, coords):
+        """Render text content onto paint surface at coords using PIL."""
+        x, y = coords
+        img = Image.fromarray(self._paint_surface)
+        draw = ImageDraw.Draw(img)
+        try:
+            font = ImageFont.truetype(self._text_font_family, self._text_font_size)
+        except (IOError, OSError):
+            try:
+                font = ImageFont.truetype("arial.ttf", self._text_font_size)
+            except (IOError, OSError):
+                font = ImageFont.load_default()
+        color = self._paint_color
+        draw.text((x, y), self._text_content, fill=color, font=font)
+        self._paint_surface[:] = np.array(img)
+
+    def _press_gradient(self, coords):
+        self._push_paint_undo()
+        self._gradient_start = coords
+        self._gradient_end = coords
+        self._stroke_preview = self._paint_surface.copy()
+
+    def _move_gradient(self, coords):
+        if self._stroke_preview is not None and self._gradient_start is not None:
+            self._paint_surface[:] = self._stroke_preview
+            self._draw_gradient(self._gradient_start, coords)
+            self._commit_paint_surface()
+
+    def _release_gradient(self, coords):
+        if self._stroke_preview is not None and self._gradient_start is not None:
+            end = coords if coords else self._gradient_end
+            self._paint_surface[:] = self._stroke_preview
+            self._draw_gradient(self._gradient_start, end)
+            self._commit_paint_surface()
+            self._stroke_preview = None
+        self._gradient_start = None
+        self._gradient_end = None
+        self._stroke_start = None
+        self._stroke_current = None
+
+    def _draw_gradient(self, start, end):
+        """Draw gradient between start and end points."""
+        h, w = self._paint_surface.shape[:2]
+        yy, xx = np.mgrid[0:h, 0:w]
+        c1 = np.array(self._paint_color, dtype=np.float32)
+        c2 = np.array(self._gradient_color2, dtype=np.float32)
+        x0, y0 = start
+        x1, y1 = end
+        dx, dy = x1 - x0, y1 - y0
+        length = max(math.sqrt(dx * dx + dy * dy), 1)
+        if self._gradient_type == "radial":
+            t = np.sqrt((xx - x0) ** 2 + (yy - y0) ** 2) / length
+        elif self._gradient_type == "angular":
+            t = (np.arctan2(yy - y0, xx - x0) + np.pi) / (2 * np.pi)
+        else:  # linear
+            t = ((xx - x0) * dx + (yy - y0) * dy) / (length * length)
+        t = np.clip(t, 0, 1).astype(np.float32)
+        gradient = np.zeros((h, w, 4), dtype=np.float32)
+        for c in range(4):
+            gradient[:, :, c] = c1[c] * (1 - t) + c2[c] * t
+        alpha = self._brush_opacity / 255.0
+        if self._selection_mask is not None:
+            mask = self._selection_mask
+            region = self._paint_surface.astype(np.float32)
+            mask3d = mask[:, :, np.newaxis].astype(np.float32)
+            blended = mask3d * (alpha * gradient + (1 - alpha) * region) + (1 - mask3d) * region
+            self._paint_surface[:] = blended.astype(np.uint8)
+        else:
+            old = self._paint_surface.astype(np.float32)
+            self._paint_surface[:] = (alpha * gradient + (1 - alpha) * old).astype(np.uint8)
+
+    def _press_selection(self, coords):
+        self._stroke_start = coords
+        self._stroke_current = coords
+        self._stroke_preview = self._paint_surface.copy() if self._paint_surface is not None else None
+
+    def _move_selection(self, coords):
+        if self._stroke_start is not None and self._stroke_preview is not None:
+            # Show selection preview by dimming outside
+            self._paint_surface[:] = self._stroke_preview
+            display = self._paint_surface.copy()
+            x0, y0 = min(self._stroke_start[0], coords[0]), min(self._stroke_start[1], coords[1])
+            x1, y1 = max(self._stroke_start[0], coords[0]), max(self._stroke_start[1], coords[1])
+            h, w = display.shape[:2]
+            x0, y0 = max(0, x0), max(0, y0)
+            x1, y1 = min(w - 1, x1), min(h - 1, y1)
+            mask = np.zeros((h, w), dtype=bool)
+            if self._select_mode == "ellipse":
+                cx_e = (x0 + x1) / 2.0
+                cy_e = (y0 + y1) / 2.0
+                rx_e = (x1 - x0) / 2.0
+                ry_e = (y1 - y0) / 2.0
+                if rx_e > 0 and ry_e > 0:
+                    yy_e, xx_e = np.ogrid[0:h, 0:w]
+                    mask = ((xx_e - cx_e) ** 2 / (rx_e ** 2) + (yy_e - cy_e) ** 2 / (ry_e ** 2)) <= 1.0
+            else:
+                mask[y0:y1 + 1, x0:x1 + 1] = True
+            unselected = ~mask
+            display[unselected, :3] = (display[unselected, :3].astype(np.float32) * 0.4).astype(np.uint8)
+            self.makeCurrent()
+            self._upload_texture(np.ascontiguousarray(np.flipud(display)))
+            self.update()
+
+    def _release_selection(self, coords):
+        if self._stroke_start is not None and coords is not None:
+            x0, y0 = min(self._stroke_start[0], coords[0]), min(self._stroke_start[1], coords[1])
+            x1, y1 = max(self._stroke_start[0], coords[0]), max(self._stroke_start[1], coords[1])
+            h, w = self._paint_surface.shape[:2]
+            x0, y0 = max(0, x0), max(0, y0)
+            x1, y1 = min(w - 1, x1), min(h - 1, y1)
+            mask = np.zeros((h, w), dtype=bool)
+            if self._select_mode == "ellipse":
+                cx_e = (x0 + x1) / 2.0
+                cy_e = (y0 + y1) / 2.0
+                rx_e = (x1 - x0) / 2.0
+                ry_e = (y1 - y0) / 2.0
+                if rx_e > 0 and ry_e > 0:
+                    yy_e, xx_e = np.ogrid[0:h, 0:w]
+                    mask = ((xx_e - cx_e) ** 2 / (rx_e ** 2) + (yy_e - cy_e) ** 2 / (ry_e ** 2)) <= 1.0
+            else:
+                mask[y0:y1 + 1, x0:x1 + 1] = True
+            if self._select_feather > 0:
+                fmask = self._feather_mask(mask, self._select_feather)
+                mask = fmask > 0.5
+            if self._stroke_preview is not None:
+                self._paint_surface[:] = self._stroke_preview
+            self._apply_selection(mask)
+        self._stroke_start = None
+        self._stroke_current = None
+        self._stroke_preview = None
+
+    def _press_lasso(self, coords):
+        if self._select_mode == "poly_lasso":
+            # Polygon lasso: click to add vertices
+            self._lasso_points.append(coords)
+            if len(self._lasso_points) >= 3:
+                # Check if close to start point (auto-close)
+                sx, sy = self._lasso_points[0]
+                dx = abs(coords[0] - sx)
+                dy = abs(coords[1] - sy)
+                if dx < 10 and dy < 10 and len(self._lasso_points) > 3:
+                    self._finish_lasso()
+        else:
+            # Freehand lasso
+            self._lasso_points = [coords]
+            self._stroke_preview = self._paint_surface.copy() if self._paint_surface is not None else None
+
+    def _move_lasso(self, coords):
+        if self._select_mode != "poly_lasso":
+            self._lasso_points.append(coords)
+
+    def _release_lasso(self, coords):
+        if self._select_mode != "poly_lasso" and len(self._lasso_points) >= 3:
+            self._finish_lasso()
+
+    def _finish_lasso(self):
+        """Convert lasso points to selection mask."""
+        if not self._lasso_points or len(self._lasso_points) < 3:
+            self._lasso_points.clear()
+            return
+        h, w = self._paint_surface.shape[:2]
+        # Use PIL to rasterize the polygon
+        mask_img = Image.new('L', (w, h), 0)
+        draw = ImageDraw.Draw(mask_img)
+        draw.polygon(self._lasso_points, fill=255)
+        mask = np.array(mask_img) > 127
+        if self._select_feather > 0:
+            fmask = self._feather_mask(mask, self._select_feather)
+            mask = fmask > 0.5
+        self._lasso_points.clear()
+        if self._stroke_preview is not None:
+            self._paint_surface[:] = self._stroke_preview
+            self._stroke_preview = None
+        self._apply_selection(mask)
+
+    def _press_transform(self, coords):
+        self._push_paint_undo()
+        self._transform_origin = coords
+        self._stroke_preview = self._paint_surface.copy()
+        if self._transform_mode in ("flip_h", "flip_v"):
+            self._apply_flip()
+
+    def _move_transform(self, coords):
+        if self._transform_origin is None or self._stroke_preview is None:
+            return
+        if self._transform_mode == "move":
+            dx = coords[0] - self._transform_origin[0]
+            dy = coords[1] - self._transform_origin[1]
+            self._paint_surface[:] = 0  # Clear
+            h, w = self._paint_surface.shape[:2]
+            src = self._stroke_preview
+            # Compute valid source/dest regions
+            sy0 = max(0, -dy)
+            sx0 = max(0, -dx)
+            dy0 = max(0, dy)
+            dx0 = max(0, dx)
+            copy_h = min(h - dy0, h - sy0)
+            copy_w = min(w - dx0, w - sx0)
+            if copy_h > 0 and copy_w > 0:
+                if self._selection_mask is not None:
+                    # Move only selected pixels
+                    region = src[sy0:sy0 + copy_h, sx0:sx0 + copy_w].copy()
+                    sel = self._selection_mask[sy0:sy0 + copy_h, sx0:sx0 + copy_w]
+                    # Place unselected from preview, selected at offset
+                    self._paint_surface[:] = self._stroke_preview.copy()
+                    # Clear selected from original position
+                    self._paint_surface[self._selection_mask] = 0
+                    # Paste selected at new position
+                    dest_sel = np.zeros((h, w), dtype=bool)
+                    dest_sel[dy0:dy0 + copy_h, dx0:dx0 + copy_w] = sel
+                    mask3 = dest_sel[dy0:dy0 + copy_h, dx0:dx0 + copy_w]
+                    self._paint_surface[dy0:dy0 + copy_h, dx0:dx0 + copy_w][mask3] = region[mask3]
+                else:
+                    self._paint_surface[dy0:dy0 + copy_h, dx0:dx0 + copy_w] = src[sy0:sy0 + copy_h, sx0:sx0 + copy_w]
+            self._commit_paint_surface()
+
+    def _release_transform(self, coords):
+        self._transform_origin = None
+        self._stroke_preview = None
+        self._stroke_start = None
+        self._stroke_current = None
+
+    def _apply_flip(self):
+        """Apply flip transform to the paint surface or selection."""
+        if self._paint_surface is None:
+            return
+        if self._selection_mask is not None:
+            # Flip only selected region
+            ys, xs = np.where(self._selection_mask)
+            if len(ys) == 0:
+                return
+            y0, y1 = ys.min(), ys.max() + 1
+            x0, x1 = xs.min(), xs.max() + 1
+            region = self._paint_surface[y0:y1, x0:x1].copy()
+            sel = self._selection_mask[y0:y1, x0:x1]
+            if self._transform_mode == "flip_h":
+                flipped = np.fliplr(region)
+                fsel = np.fliplr(sel)
+            else:
+                flipped = np.flipud(region)
+                fsel = np.flipud(sel)
+            self._paint_surface[y0:y1, x0:x1][fsel] = flipped[fsel]
+        else:
+            if self._transform_mode == "flip_h":
+                self._paint_surface[:] = np.fliplr(self._paint_surface)
+            else:
+                self._paint_surface[:] = np.flipud(self._paint_surface)
+        self._commit_paint_surface()
+
+    def _press_crop(self, coords):
+        self._stroke_start = coords
+        self._stroke_preview = self._paint_surface.copy() if self._paint_surface is not None else None
+
+    def _move_crop(self, coords):
+        if self._stroke_start is not None and self._stroke_preview is not None:
+            self._paint_surface[:] = self._stroke_preview
+            display = self._paint_surface.copy()
+            x0, y0 = min(self._stroke_start[0], coords[0]), min(self._stroke_start[1], coords[1])
+            x1, y1 = max(self._stroke_start[0], coords[0]), max(self._stroke_start[1], coords[1])
+            h, w = display.shape[:2]
+            # Dim outside crop region
+            display[:y0, :, :3] = (display[:y0, :, :3].astype(np.float32) * 0.3).astype(np.uint8)
+            display[y1:, :, :3] = (display[y1:, :, :3].astype(np.float32) * 0.3).astype(np.uint8)
+            display[y0:y1, :x0, :3] = (display[y0:y1, :x0, :3].astype(np.float32) * 0.3).astype(np.uint8)
+            display[y0:y1, x1:, :3] = (display[y0:y1, x1:, :3].astype(np.float32) * 0.3).astype(np.uint8)
+            self.makeCurrent()
+            self._upload_texture(np.ascontiguousarray(np.flipud(display)))
+            self.update()
+            self._crop_rect = (x0, y0, x1, y1)
+
+    def _release_crop(self, coords):
+        if self._crop_rect is not None:
+            x0, y0, x1, y1 = self._crop_rect
+            if x1 > x0 + 1 and y1 > y0 + 1:
+                self._push_paint_undo()
+                cropped = self._paint_surface[y0:y1, x0:x1].copy()
+                self._paint_surface = np.ascontiguousarray(cropped)
+                self.image_size = (cropped.shape[1], cropped.shape[0])
+                self._selection_mask = None
+                self._commit_paint_surface()
+            elif self._stroke_preview is not None:
+                self._paint_surface[:] = self._stroke_preview
+                self._commit_paint_surface()
+        self._crop_rect = None
+        self._stroke_start = None
+        self._stroke_preview = None
+
+    def _draw_polygon_shape(self, start, end):
+        """Draw a polygon/star shape between center (start) and edge (end)."""
+        cx, cy = start
+        dx, dy = end[0] - cx, end[1] - cy
+        radius = math.sqrt(dx * dx + dy * dy)
+        if radius < 2:
+            return
+        angle_offset = math.atan2(dy, dx)
+        points = self._polygon_points(cx, cy, radius, self._polygon_sides,
+                                       self._polygon_star, self._polygon_inner_ratio, angle_offset)
+        img = Image.fromarray(self._paint_surface)
+        draw = ImageDraw.Draw(img)
+        color = tuple(self._paint_color)
+        if self._fill_mode == "filled":
+            draw.polygon(points, fill=color)
+        else:
+            img_diameter = max(1, round(self._brush_size * self._screen_to_image_scale()))
+            draw.polygon(points, outline=color, width=img_diameter)
+        self._paint_surface[:] = np.array(img)
+
+    # --- Brush engine utilities ---
+
+    def _screen_to_image_scale(self):
+        """Return how many image pixels one screen pixel covers.
+        When the image is zoomed in (each image pixel = multiple screen pixels),
+        this returns a value < 1. When zoomed out, > 1."""
+        if self.image_size is None:
+            return 1.0
+        iw, ih = self.image_size
+        ratio = self.devicePixelRatio()
+        vw = max(1, self.width() * ratio)
+        vh = max(1, self.height() * ratio)
+        ax, ay = self._get_aspect_scale()
+        zoom = self.zoom_2d if self.zoom_2d > 0.0 else 1.0
+        # Image spans (2 * ax * zoom) NDC units horizontally across vw screen pixels
+        # So screen_px_per_image_px = (vw * ax * zoom) / iw
+        # We want image_px_per_screen_px = iw / (vw * ax * zoom)
+        scale_x = iw / (vw * ax * zoom)
+        scale_y = ih / (vh * ay * zoom)
+        return (scale_x + scale_y) / 2.0  # Average of both axes
+
+    @property
+    def _brush_radius(self):
+        """Convert brush screen-space diameter to image-space radius for kernel generation.
+        Size 1 = 1 screen pixel regardless of zoom level."""
+        # Convert screen-space diameter to image-space diameter
+        scale = self._screen_to_image_scale()
+        image_diameter = max(1, round(self._brush_size * scale))
+        return max(0, (image_diameter - 1)) // 2
+
+    def _make_brush_kernel(self, radius=None, hardness=None, tip=None):
+        """Generate a 2D alpha kernel for the brush.
+        Returns: numpy float32 array (2*radius+1, 2*radius+1) with values 0-1.
+        """
+        if radius is None:
+            radius = self._brush_radius
+        if hardness is None:
+            hardness = self._brush_hardness
+        if tip is None:
+            tip = self._brush_tip
+        if radius <= 0:
+            return np.ones((1, 1), dtype=np.float32)
+        size = 2 * radius + 1
+        yy, xx = np.ogrid[-radius:radius + 1, -radius:radius + 1]
+        if tip == "custom" and self._custom_brush_image is not None:
+            # Resize custom brush image to match brush size
+            from PIL import Image
+            src = self._custom_brush_image
+            img = Image.fromarray((src * 255).astype(np.uint8), mode='L')
+            img = img.resize((size, size), Image.Resampling.LANCZOS)
+            kernel = np.array(img, dtype=np.float32) / 255.0
+            return kernel
+        elif tip == "square":
+            dist = np.maximum(np.abs(xx), np.abs(yy)).astype(np.float64) / max(radius, 1)
+        elif tip == "diamond":
+            dist = (np.abs(xx) + np.abs(yy)).astype(np.float64) / max(radius, 1)
+        else:  # round (default)
+            dist = np.sqrt(xx * xx + yy * yy).astype(np.float64) / max(radius, 1)
+        if hardness >= 1.0:
+            kernel = (dist <= 1.0).astype(np.float32)
+        else:
+            inner = hardness
+            falloff = max(1.0 - inner, 0.01)
+            kernel = np.clip((1.0 - dist) / falloff, 0.0, 1.0).astype(np.float32)
+            kernel[dist > 1.0] = 0.0
+        return kernel
+
+    def _box_blur_region(self, region, radius):
+        """Box blur a numpy (H,W,C) float32 region using cumsum. Returns blurred copy."""
+        if radius <= 0:
+            return region.copy()
+        h, w = region.shape[:2]
+        pad = radius
+        padded = np.pad(region, ((pad, pad), (pad, pad), (0, 0)), mode='edge')
+        # Horizontal pass
+        cs = np.cumsum(padded, axis=1)
+        ks = 2 * radius + 1
+        horiz = np.zeros_like(padded)
+        horiz[:, radius:padded.shape[1] - radius, :] = (
+            cs[:, ks:, :] - cs[:, :-ks, :]
+        ) / ks
+        # Vertical pass
+        cs2 = np.cumsum(horiz, axis=0)
+        result = np.zeros_like(padded)
+        result[radius:padded.shape[0] - radius, :, :] = (
+            cs2[ks:, :, :] - cs2[:-ks, :, :]
+        ) / ks
+        return np.clip(result[pad:pad + h, pad:pad + w], 0, 255)
+
+    def _sample_color_at(self, coords):
+        """Sample RGBA from paint surface at image coords. Returns tuple."""
+        x, y = coords
+        if self._paint_surface is None:
+            return (0, 0, 0, 255)
+        h, w = self._paint_surface.shape[:2]
+        x = max(0, min(w - 1, x))
+        y = max(0, min(h - 1, y))
+        return tuple(self._paint_surface[y, x].tolist())
+
+    def _jitter_color(self, color=None):
+        """Apply HSV jitter to an RGBA color tuple. Returns jittered RGBA tuple."""
+        if color is None:
+            color = self._paint_color
+        r, g, b, a = color
+        h, s, v = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+        h = (h + random.uniform(-self._hue_jitter, self._hue_jitter)) % 1.0
+        s = max(0, min(1, s + random.uniform(-self._sat_jitter, self._sat_jitter)))
+        v = max(0, min(1, v + random.uniform(-self._val_jitter, self._val_jitter)))
+        r2, g2, b2 = colorsys.hsv_to_rgb(h, s, v)
+        return (int(r2 * 255), int(g2 * 255), int(b2 * 255), a)
+
+    def _stabilize_coords(self, coords):
+        """Apply rolling average stabilization. Returns smoothed (x,y)."""
+        if not self._stabilizer_enabled:
+            return coords
+        self._stabilizer_points.append(coords)
+        if len(self._stabilizer_points) > self._stabilizer_strength:
+            self._stabilizer_points.pop(0)
+        avg_x = sum(p[0] for p in self._stabilizer_points) / len(self._stabilizer_points)
+        avg_y = sum(p[1] for p in self._stabilizer_points) / len(self._stabilizer_points)
+        return (int(avg_x), int(avg_y))
+
+    def _polygon_points(self, cx, cy, radius, sides, star=False, inner_ratio=0.5, angle_offset=0):
+        """Compute vertex coordinates for a regular polygon or star."""
+        points = []
+        if star:
+            for i in range(sides * 2):
+                angle = angle_offset + math.pi * i / sides - math.pi / 2
+                r = radius if i % 2 == 0 else radius * inner_ratio
+                points.append((int(cx + r * math.cos(angle)), int(cy + r * math.sin(angle))))
+        else:
+            for i in range(sides):
+                angle = angle_offset + 2 * math.pi * i / sides - math.pi / 2
+                points.append((int(cx + radius * math.cos(angle)), int(cy + radius * math.sin(angle))))
+        return points
+
+    def _feather_mask(self, mask, radius):
+        """Apply box-blur feathering to a boolean selection mask. Returns float32 array 0-1."""
+        if radius <= 0:
+            return mask.astype(np.float32)
+        fmask = mask.astype(np.float32)
+        # 3-pass box blur to approximate Gaussian
+        for _ in range(3):
+            padded = np.pad(fmask, radius, mode='edge')
+            cs = np.cumsum(padded, axis=1)
+            ks = 2 * radius + 1
+            horiz = np.zeros_like(padded)
+            horiz[:, radius:padded.shape[1] - radius] = (
+                cs[:, ks:] - cs[:, :-ks]
+            ) / ks
+            cs2 = np.cumsum(horiz, axis=0)
+            vert = np.zeros_like(padded)
+            vert[radius:padded.shape[0] - radius, :] = (
+                cs2[ks:, :] - cs2[:-ks, :]
+            ) / ks
+            fmask = vert[radius:radius + mask.shape[0], radius:radius + mask.shape[1]]
+        return np.clip(fmask, 0.0, 1.0)
+
+    # --- Drawing algorithms ---
+
+    def _draw_brush_at(self, coords, color=None, kernel=None):
+        """Draw a brush stamp at image coords (x, y) using the brush kernel.
+        Supports pressure sensitivity for size and opacity.
+        If _painting_mask is True, paints on the selected layer's mask instead."""
+        # Route to mask painting if in mask mode
+        if self._painting_mask:
+            self._draw_mask_brush_at(coords, kernel=kernel)
+            return
+
+        x, y = coords
+        pressure = self._tablet_pressure
+
+        # Pressure-based size scaling
+        if self._pressure_affects_size and pressure < 1.0:
+            scale = self._pressure_min_size + (1.0 - self._pressure_min_size) * pressure
+            r = max(1, int(self._brush_radius * scale))
+            # Regenerate kernel at scaled size if not provided
+            if kernel is None:
+                kernel = self._make_brush_kernel(radius=r)
+        else:
+            r = self._brush_radius
+            if kernel is None:
+                kernel = self._make_brush_kernel()
+
+        h, w = self._paint_surface.shape[:2]
+        y0 = max(0, y - r)
+        y1 = min(h, y + r + 1)
+        x0 = max(0, x - r)
+        x1 = min(w, x + r + 1)
+        if y0 >= y1 or x0 >= x1:
+            return
+        # Slice kernel to match clamped region
+        ky0, ky1 = y0 - (y - r), y1 - (y - r)
+        kx0, kx1 = x0 - (x - r), x1 - (x - r)
+        k = kernel[ky0:ky1, kx0:kx1]
+        if self._selection_mask is not None:
+            k = k * self._selection_mask[y0:y1, x0:x1].astype(np.float32)
+        if color is None:
+            if self._active_tool == "eraser":
+                color = np.array([0, 0, 0, 0], dtype=np.uint8)
+            else:
+                pc = self._jitter_color() if (self._hue_jitter > 0 or self._sat_jitter > 0 or self._val_jitter > 0) else self._paint_color
+                color = np.array(pc, dtype=np.uint8)
+        elif not isinstance(color, np.ndarray):
+            color = np.array(color, dtype=np.uint8)
+
+        # Pressure-based opacity scaling
+        opacity = self._brush_opacity / 255.0
+        if self._pressure_affects_opacity and pressure < 1.0:
+            opacity *= pressure
+        alpha = k * opacity
+
+        region = self._paint_surface[y0:y1, x0:x1].astype(np.float32)
+        color_f = color.astype(np.float32)
+        for c in range(4):
+            region[:, :, c] = alpha * color_f[c] + (1.0 - alpha) * region[:, :, c]
+        self._paint_surface[y0:y1, x0:x1] = region.astype(np.uint8)
+
+    def _draw_mask_brush_at(self, coords, kernel=None):
+        """Paint on the active layer's mask (grayscale).
+        White paint reveals, black conceals, eraser paints black."""
+        # Find the selected layer with a mask
+        if not self._layers:
+            return
+        # Use the last selected layer or the top layer
+        layer = self._layers[-1]  # fallback
+        for l in reversed(self._layers):
+            if l.get('mask') is not None:
+                layer = l
+                break
+        mask = layer.get('mask')
+        if mask is None:
+            return
+
+        x, y = coords
+        r = self._brush_radius
+        if kernel is None:
+            kernel = self._make_brush_kernel()
+        h, w = mask.shape[:2]
+        y0, y1 = max(0, y - r), min(h, y + r + 1)
+        x0, x1 = max(0, x - r), min(w, x + r + 1)
+        if y0 >= y1 or x0 >= x1:
+            return
+        ky0, ky1 = y0 - (y - r), y1 - (y - r)
+        kx0, kx1 = x0 - (x - r), x1 - (x - r)
+        k = kernel[ky0:ky1, kx0:kx1]
+
+        # Determine paint value: white (255) for pencil, black (0) for eraser
+        if self._active_tool == "eraser":
+            paint_val = 0.0
+        else:
+            paint_val = 255.0
+
+        opacity = self._brush_opacity / 255.0 * self._tablet_pressure
+        alpha = k * opacity
+        region = mask[y0:y1, x0:x1].astype(np.float32)
+        region = alpha * paint_val + (1.0 - alpha) * region
+        mask[y0:y1, x0:x1] = region.astype(np.uint8)
+
+        # Re-render layers with updated mask
+        self._render_layers()
+
+    def _draw_brush_at_symmetry(self, coords, **kwargs):
+        """Draw brush stamp with optional symmetry mirroring (incl. radial)."""
+        self._draw_brush_at(coords, **kwargs)
+        if not self._symmetry_enabled:
+            return
+        x, y = coords
+        h, w = self._paint_surface.shape[:2]
+        cx, cy = w // 2, h // 2
+
+        if self._symmetry_axis == "radial":
+            # Radial symmetry: rotate brush around center N times
+            segments = max(2, self._symmetry_segments)
+            dx, dy = x - cx, y - cy
+            for i in range(1, segments):
+                angle = 2.0 * math.pi * i / segments
+                rx = int(cx + dx * math.cos(angle) - dy * math.sin(angle))
+                ry = int(cy + dx * math.sin(angle) + dy * math.cos(angle))
+                self._draw_brush_at((rx, ry), **kwargs)
+        else:
+            if self._symmetry_axis in ("vertical", "both"):
+                mx = 2 * cx - x
+                self._draw_brush_at((mx, y), **kwargs)
+            if self._symmetry_axis in ("horizontal", "both"):
+                my = 2 * cy - y
+                self._draw_brush_at((x, my), **kwargs)
+            if self._symmetry_axis == "both":
+                mx = 2 * cx - x
+                my = 2 * cy - y
+                self._draw_brush_at((mx, my), **kwargs)
+
+    def _draw_line_between(self, p0, p1, kernel=None):
+        """Draw brush stamps along a line from p0 to p1 with spacing support."""
+        if kernel is None:
+            kernel = self._make_brush_kernel()
+        x0, y0 = p0
+        x1, y1 = p1
+        dx, dy = x1 - x0, y1 - y0
+        dist = math.sqrt(dx * dx + dy * dy)
+        step = max(1, int(self._brush_radius * 2 * self._brush_spacing))
+        if dist < 1:
+            self._draw_brush_at_symmetry((x0, y0), kernel=kernel)
+            return
+        steps = max(1, int(dist / step))
+        for i in range(steps + 1):
+            t = i / max(steps, 1)
+            px = int(x0 + dx * t)
+            py = int(y0 + dy * t)
+            if self._brush_scatter > 0:
+                jitter = self._brush_scatter * self._brush_radius
+                px += int(random.uniform(-jitter, jitter))
+                py += int(random.uniform(-jitter, jitter))
+            self._draw_brush_at_symmetry((px, py), kernel=kernel)
+
+    def _draw_shape(self, start, end):
+        """Draw the active shape tool between start and end coords."""
+        if self._active_tool == "line":
+            self._draw_line_between(start, end)
+        elif self._active_tool == "rect":
+            self._draw_rect(start, end)
+        elif self._active_tool == "ellipse":
+            self._draw_ellipse(start, end)
+
+    def _draw_rect(self, p0, p1):
+        """Draw a rectangle between two corners."""
+        x0, y0 = min(p0[0], p1[0]), min(p0[1], p1[1])
+        x1, y1 = max(p0[0], p1[0]), max(p0[1], p1[1])
+        h, w = self._paint_surface.shape[:2]
+        x0, y0 = max(0, x0), max(0, y0)
+        x1, y1 = min(w - 1, x1), min(h - 1, y1)
+        color = np.array(self._paint_color, dtype=np.uint8)
+
+        if self._fill_mode == "filled":
+            region = self._paint_surface[y0:y1 + 1, x0:x1 + 1]
+            if self._selection_mask is not None:
+                mask = self._selection_mask[y0:y1 + 1, x0:x1 + 1]
+                region[mask] = color
+            else:
+                region[:] = color
+        else:
+            self._draw_line_between((x0, y0), (x1, y0))
+            self._draw_line_between((x0, y1), (x1, y1))
+            self._draw_line_between((x0, y0), (x0, y1))
+            self._draw_line_between((x1, y0), (x1, y1))
+
+    def _draw_ellipse(self, p0, p1):
+        """Draw an ellipse inscribed in the rectangle from p0 to p1."""
+        x0, y0 = min(p0[0], p1[0]), min(p0[1], p1[1])
+        x1, y1 = max(p0[0], p1[0]), max(p0[1], p1[1])
+        h, w = self._paint_surface.shape[:2]
+        cx = (x0 + x1) / 2.0
+        cy = (y0 + y1) / 2.0
+        rx = (x1 - x0) / 2.0
+        ry = (y1 - y0) / 2.0
+        if rx <= 0 or ry <= 0:
+            return
+
+        ey0 = max(0, y0)
+        ey1 = min(h, y1 + 1)
+        ex0 = max(0, x0)
+        ex1 = min(w, x1 + 1)
+
+        yy, xx = np.ogrid[ey0:ey1, ex0:ex1]
+        ellipse_mask = ((xx - cx) ** 2 / (rx ** 2) + (yy - cy) ** 2 / (ry ** 2)) <= 1.0
+
+        if self._fill_mode == "outline":
+            inner_rx = max(0, rx - max(1, self._brush_radius))
+            inner_ry = max(0, ry - max(1, self._brush_radius))
+            if inner_rx > 0 and inner_ry > 0:
+                inner_mask = ((xx - cx) ** 2 / (inner_rx ** 2) + (yy - cy) ** 2 / (inner_ry ** 2)) <= 1.0
+                ellipse_mask = ellipse_mask & ~inner_mask
+
+        if self._selection_mask is not None:
+            ellipse_mask = ellipse_mask & self._selection_mask[ey0:ey1, ex0:ex1]
+
+        color = np.array(self._paint_color, dtype=np.uint8)
+        self._paint_surface[ey0:ey1, ex0:ex1][ellipse_mask] = color
+
+    def _flood_fill(self, coords):
+        """Flood fill from coords with current paint color and tolerance."""
+        from collections import deque
+        x, y = coords
+        h, w = self._paint_surface.shape[:2]
+        if x < 0 or x >= w or y < 0 or y >= h:
+            return
+
+        target = self._paint_surface[y, x].copy().astype(np.int16)
+        fill_color = np.array(self._paint_color, dtype=np.uint8)
+        tol = self._tolerance
+
+        if np.array_equal(self._paint_surface[y, x], fill_color):
+            return
+
+        visited = np.zeros((h, w), dtype=bool)
+        queue = deque([(x, y)])
+
+        while queue:
+            cx, cy = queue.popleft()
+            if cx < 0 or cx >= w or cy < 0 or cy >= h:
+                continue
+            if visited[cy, cx]:
+                continue
+            pixel = self._paint_surface[cy, cx].astype(np.int16)
+            if not np.all(np.abs(pixel[:3] - target[:3]) <= tol):
+                continue
+            visited[cy, cx] = True
+            if self._selection_mask is None or self._selection_mask[cy, cx]:
+                self._paint_surface[cy, cx] = fill_color
+            queue.extend([(cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)])
+
+    def _flood_fill_transparent(self, coords):
+        """Flood fill from coords, setting matched pixels to transparent (alpha=0)."""
+        from collections import deque
+        x, y = coords
+        h, w = self._paint_surface.shape[:2]
+        if x < 0 or x >= w or y < 0 or y >= h:
+            return
+
+        target = self._paint_surface[y, x].copy().astype(np.int16)
+        fill_color = np.array([0, 0, 0, 0], dtype=np.uint8)
+        tol = self._tolerance
+
+        # If pixel is already fully transparent, nothing to do
+        if self._paint_surface[y, x, 3] == 0:
+            return
+
+        visited = np.zeros((h, w), dtype=bool)
+        queue = deque([(x, y)])
+
+        while queue:
+            cx, cy = queue.popleft()
+            if cx < 0 or cx >= w or cy < 0 or cy >= h:
+                continue
+            if visited[cy, cx]:
+                continue
+            pixel = self._paint_surface[cy, cx].astype(np.int16)
+            if not np.all(np.abs(pixel[:3] - target[:3]) <= tol):
+                continue
+            visited[cy, cx] = True
+            if self._selection_mask is None or self._selection_mask[cy, cx]:
+                self._paint_surface[cy, cx] = fill_color
+            queue.extend([(cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)])
+
+    def _magic_wand_select(self, coords):
+        """Select contiguous region by color similarity from click point."""
+        from collections import deque
+        self._ensure_paint_surface()
+        if self._paint_surface is None:
+            return
+        x, y = coords
+        h, w = self._paint_surface.shape[:2]
+        if x < 0 or x >= w or y < 0 or y >= h:
+            return
+
+        target = self._paint_surface[y, x].copy().astype(np.int16)
+        tol = self._tolerance
+
+        visited = np.zeros((h, w), dtype=bool)
+        selected = np.zeros((h, w), dtype=bool)
+        queue = deque([(x, y)])
+
+        while queue:
+            cx, cy = queue.popleft()
+            if cx < 0 or cx >= w or cy < 0 or cy >= h:
+                continue
+            if visited[cy, cx]:
+                continue
+            visited[cy, cx] = True
+            pixel = self._paint_surface[cy, cx].astype(np.int16)
+            if np.all(np.abs(pixel[:3] - target[:3]) <= tol):
+                selected[cy, cx] = True
+                queue.extend([(cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)])
+
+        self._apply_selection(selected)
+
+    def _update_selection_display(self):
+        """Show selection overlay by dimming unselected areas."""
+        if self._paint_surface is None:
+            return
+        display = self._paint_surface.copy()
+        if self._selection_mask is not None:
+            unselected = ~self._selection_mask
+            display[unselected, :3] = (display[unselected, :3].astype(np.float32) * 0.4).astype(np.uint8)
+        self.makeCurrent()
+        self._upload_texture(np.ascontiguousarray(np.flipud(display)))
+        self.update()
+
+    def _apply_selection(self, new_mask):
+        """Apply a new selection mask, adding to existing if Shift is held."""
+        self._push_paint_undo()  # Snapshot before selection change for undo
+        mods = getattr(self, '_press_modifiers', None)
+        shift_held = bool(mods and mods & QtCore.Qt.KeyboardModifier.ShiftModifier)
+        if shift_held and self._selection_mask is not None:
+            self._selection_mask = self._selection_mask | new_mask
+        else:
+            self._selection_mask = new_mask
+        self._update_selection_display()
+
+    def clear_selection(self):
+        """Clear the selection mask and restore normal display."""
+        self._push_paint_undo()  # Snapshot before clearing for undo
+        self._selection_mask = None
+        if self._paint_surface is not None:
+            self._commit_paint_surface()
 
     # --- KEYFRAME ANIMATION ---
     def add_keyframe(self, time):
@@ -12387,6 +17113,417 @@ void main() {
         return self.uniforms
 
 
+class FlowLayout(QtWidgets.QLayout):
+    """A layout that arranges widgets left-to-right, wrapping to the next line on overflow."""
+
+    def __init__(self, parent=None, margin=0, h_spacing=4, v_spacing=4):
+        super().__init__(parent)
+        self._h_spacing = h_spacing
+        self._v_spacing = v_spacing
+        self._items = []
+        self.setContentsMargins(margin, margin, margin, margin)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):
+        if 0 <= index < len(self._items):
+            return self._items[index]
+        return None
+
+    def takeAt(self, index):
+        if 0 <= index < len(self._items):
+            return self._items.pop(index)
+        return None
+
+    def expandingDirections(self):
+        return QtCore.Qt.Orientation(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._do_layout(QtCore.QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._do_layout(rect, test_only=False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QtCore.QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        m = self.contentsMargins()
+        size += QtCore.QSize(m.left() + m.right(), m.top() + m.bottom())
+        return size
+
+    def _do_layout(self, rect, test_only):
+        m = self.contentsMargins()
+        effective = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        x = effective.x()
+        y = effective.y()
+        row_height = 0
+
+        for item in self._items:
+            wid = item.widget()
+            if wid is not None and not wid.isVisible():
+                continue
+            item_size = item.sizeHint()
+            next_x = x + item_size.width() + self._h_spacing
+            if next_x - self._h_spacing > effective.right() + 1 and row_height > 0:
+                x = effective.x()
+                y = y + row_height + self._v_spacing
+                next_x = x + item_size.width() + self._h_spacing
+                row_height = 0
+            if not test_only:
+                item.setGeometry(QtCore.QRect(QtCore.QPoint(x, y), item_size))
+            x = next_x
+            row_height = max(row_height, item_size.height())
+
+        return y + row_height - rect.y() + m.bottom()
+
+
+class AIModelDialog(QtWidgets.QDialog):
+    """Dialog for adding, editing, and removing custom AI models."""
+
+    TYPE_MAP = {
+        "OpenAI-Compatible": ("openai", "http://localhost:11434"),
+        "Anthropic": ("anthropic", "https://api.anthropic.com"),
+        "Google": ("google", "https://generativelanguage.googleapis.com"),
+    }
+    TYPE_LABELS = {v[0]: k for k, v in TYPE_MAP.items()}  # reverse lookup
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Manage AI Models")
+        self.resize(620, 420)
+        self.setStyleSheet("""
+            QDialog { background-color: #2a2a2a; color: #ddd; }
+            QLabel { color: #ccc; font-size: 11px; }
+            QLineEdit, QComboBox {
+                background-color: #1e1e1e; color: #ddd; border: 1px solid #444;
+                border-radius: 3px; padding: 4px 6px; font-size: 11px;
+            }
+            QListWidget {
+                background-color: #1e1e1e; color: #ddd; border: 1px solid #444;
+                font-size: 11px;
+            }
+            QListWidget::item:selected { background-color: #3a4a5a; }
+            QPushButton {
+                background-color: #353535; color: #ddd; border: 1px solid #444;
+                border-radius: 3px; padding: 5px 12px; font-size: 11px;
+            }
+            QPushButton:hover { background-color: #404040; }
+        """)
+
+        self._edits = dict(CUSTOM_AI_MODELS)  # working copy
+
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setSpacing(10)
+
+        # --- Left: model list ---
+        left = QtWidgets.QVBoxLayout()
+        left.setSpacing(4)
+        list_label = QtWidgets.QLabel("Custom Models")
+        list_label.setStyleSheet("font-weight: bold; font-size: 12px; color: #fff;")
+        left.addWidget(list_label)
+
+        self._model_list = QtWidgets.QListWidget()
+        self._model_list.currentRowChanged.connect(self._on_select)
+        left.addWidget(self._model_list, 1)
+
+        list_btns = QtWidgets.QHBoxLayout()
+        add_btn = QtWidgets.QPushButton("+ Add")
+        add_btn.setStyleSheet("background-color: #3d5a3d;")
+        add_btn.clicked.connect(self._add_model)
+        list_btns.addWidget(add_btn)
+        remove_btn = QtWidgets.QPushButton("- Remove")
+        remove_btn.setStyleSheet("background-color: #5a3d3d;")
+        remove_btn.clicked.connect(self._remove_model)
+        list_btns.addWidget(remove_btn)
+        left.addLayout(list_btns)
+        layout.addLayout(left)
+
+        # --- Right: edit form ---
+        right = QtWidgets.QVBoxLayout()
+        right.setSpacing(6)
+        form_label = QtWidgets.QLabel("Model Settings")
+        form_label.setStyleSheet("font-weight: bold; font-size: 12px; color: #fff;")
+        right.addWidget(form_label)
+
+        form = QtWidgets.QFormLayout()
+        form.setSpacing(6)
+        form.setLabelAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
+
+        self._name_edit = QtWidgets.QLineEdit()
+        self._name_edit.setPlaceholderText("e.g. Qwen Coder (Local)")
+        form.addRow("Display Name:", self._name_edit)
+
+        self._type_combo = QtWidgets.QComboBox()
+        self._type_combo.addItems(list(self.TYPE_MAP.keys()))
+        self._type_combo.currentTextChanged.connect(self._on_type_changed)
+        form.addRow("Type:", self._type_combo)
+
+        self._model_edit = QtWidgets.QLineEdit()
+        self._model_edit.setPlaceholderText("e.g. qwen2.5-coder, gpt-4o, llama3")
+        form.addRow("Model ID:", self._model_edit)
+
+        self._url_edit = QtWidgets.QLineEdit()
+        self._url_edit.setPlaceholderText("e.g. http://localhost:11434")
+        form.addRow("Endpoint URL:", self._url_edit)
+
+        self._key_edit = QtWidgets.QLineEdit()
+        self._key_edit.setPlaceholderText("Leave blank for local models")
+        self._key_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        form.addRow("API Key:", self._key_edit)
+
+        self._env_edit = QtWidgets.QLineEdit()
+        self._env_edit.setPlaceholderText("e.g. OPENAI_API_KEY (optional)")
+        form.addRow("API Key Env Var:", self._env_edit)
+
+        self._timeout_spin = QtWidgets.QSpinBox()
+        self._timeout_spin.setRange(10, 600)
+        self._timeout_spin.setValue(120)
+        self._timeout_spin.setSuffix(" sec")
+        self._timeout_spin.setToolTip("Request timeout in seconds. Local models may need 120-300s on first load.")
+        form.addRow("Timeout:", self._timeout_spin)
+
+        self._desc_edit = QtWidgets.QLineEdit()
+        self._desc_edit.setPlaceholderText("Short description (optional)")
+        form.addRow("Description:", self._desc_edit)
+
+        right.addLayout(form)
+
+        # Update / Test buttons
+        update_row = QtWidgets.QHBoxLayout()
+        update_btn = QtWidgets.QPushButton("Update Model")
+        update_btn.setStyleSheet("background-color: #4a6fa5; font-weight: bold;")
+        update_btn.clicked.connect(self._update_current)
+        update_row.addWidget(update_btn)
+
+        test_btn = QtWidgets.QPushButton("Test Connection")
+        test_btn.setStyleSheet("background-color: #3d5a3d;")
+        test_btn.clicked.connect(self._test_connection)
+        update_row.addWidget(test_btn)
+        right.addLayout(update_row)
+
+        self._status_label = QtWidgets.QLabel("")
+        self._status_label.setWordWrap(True)
+        self._status_label.setStyleSheet("color: #7aa2d6; font-size: 10px; font-style: italic;")
+        right.addWidget(self._status_label)
+
+        right.addStretch()
+
+        # Bottom buttons
+        bottom_btns = QtWidgets.QHBoxLayout()
+        bottom_btns.addStretch()
+        save_btn = QtWidgets.QPushButton("Save && Close")
+        save_btn.setStyleSheet("background-color: #3d5a3d; font-weight: bold; padding: 6px 20px;")
+        save_btn.clicked.connect(self.accept)
+        bottom_btns.addWidget(save_btn)
+        cancel_btn = QtWidgets.QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        bottom_btns.addWidget(cancel_btn)
+        right.addLayout(bottom_btns)
+
+        layout.addLayout(right, 1)
+
+        self._refresh_list()
+        self._clear_form()
+
+    def _refresh_list(self):
+        self._model_list.clear()
+        for name in sorted(self._edits.keys()):
+            self._model_list.addItem(name)
+
+    def _clear_form(self):
+        self._name_edit.clear()
+        self._type_combo.setCurrentIndex(0)
+        self._model_edit.clear()
+        self._url_edit.clear()
+        self._key_edit.clear()
+        self._env_edit.clear()
+        self._timeout_spin.setValue(120)
+        self._desc_edit.clear()
+        self._status_label.clear()
+
+    def _on_select(self, row):
+        if row < 0:
+            self._clear_form()
+            return
+        name = self._model_list.item(row).text()
+        cfg = self._edits.get(name, {})
+        self._name_edit.setText(name)
+        # Set type combo
+        cfg_type = cfg.get("type", "openai")
+        label = self.TYPE_LABELS.get(cfg_type, "OpenAI-Compatible")
+        idx = self._type_combo.findText(label)
+        if idx >= 0:
+            self._type_combo.setCurrentIndex(idx)
+        self._model_edit.setText(cfg.get("model", ""))
+        self._url_edit.setText(cfg.get("base_url", ""))
+        self._key_edit.setText(cfg.get("api_key", ""))
+        self._env_edit.setText(cfg.get("api_key_env", ""))
+        self._timeout_spin.setValue(cfg.get("timeout", 120))
+        self._desc_edit.setText(cfg.get("description", ""))
+        self._status_label.clear()
+
+    def _on_type_changed(self, type_label):
+        if not self._url_edit.text().strip():
+            _, default_url = self.TYPE_MAP.get(type_label, ("openai", ""))
+            self._url_edit.setText(default_url)
+
+    def _add_model(self):
+        name = f"New Model {len(self._edits) + 1}"
+        self._edits[name] = {
+            "type": "openai",
+            "model": "",
+            "base_url": "http://localhost:11434",
+            "api_key": "",
+            "api_key_env": "",
+            "timeout": 120,
+            "description": "",
+        }
+        self._refresh_list()
+        # Select the new item
+        for i in range(self._model_list.count()):
+            if self._model_list.item(i).text() == name:
+                self._model_list.setCurrentRow(i)
+                break
+        self._name_edit.setFocus()
+        self._name_edit.selectAll()
+
+    def _remove_model(self):
+        row = self._model_list.currentRow()
+        if row < 0:
+            return
+        name = self._model_list.item(row).text()
+        self._edits.pop(name, None)
+        self._refresh_list()
+        self._clear_form()
+
+    def _update_current(self):
+        """Save form values to the working copy under the (possibly renamed) key."""
+        row = self._model_list.currentRow()
+        if row < 0:
+            self._status_label.setText("No model selected.")
+            return
+
+        old_name = self._model_list.item(row).text()
+        new_name = self._name_edit.text().strip()
+        if not new_name:
+            self._status_label.setText("Display name is required.")
+            return
+        if not self._model_edit.text().strip():
+            self._status_label.setText("Model ID is required.")
+            return
+
+        type_label = self._type_combo.currentText()
+        cfg_type, _ = self.TYPE_MAP.get(type_label, ("openai", ""))
+
+        cfg = {
+            "type": cfg_type,
+            "model": self._model_edit.text().strip(),
+            "base_url": self._url_edit.text().strip(),
+            "api_key": self._key_edit.text().strip(),
+            "api_key_env": self._env_edit.text().strip(),
+            "timeout": self._timeout_spin.value(),
+            "description": self._desc_edit.text().strip(),
+        }
+
+        # Handle rename
+        if old_name != new_name:
+            self._edits.pop(old_name, None)
+        self._edits[new_name] = cfg
+
+        self._refresh_list()
+        for i in range(self._model_list.count()):
+            if self._model_list.item(i).text() == new_name:
+                self._model_list.setCurrentRow(i)
+                break
+        self._status_label.setText(f"'{new_name}' updated.")
+
+    def _test_connection(self):
+        """Send a tiny test request to validate the endpoint."""
+        import urllib.request
+        url = self._url_edit.text().strip().rstrip('/')
+        model = self._model_edit.text().strip()
+        api_key = self._key_edit.text().strip()
+        if not api_key and self._env_edit.text().strip():
+            api_key = os.environ.get(self._env_edit.text().strip(), "")
+
+        if not url:
+            self._status_label.setText("Enter an endpoint URL first.")
+            return
+
+        timeout = self._timeout_spin.value()
+        self._status_label.setText(f"Testing connection (timeout: {timeout}s, please wait)...")
+        self._status_label.setStyleSheet("color: #d6c77a; font-size: 10px; font-style: italic;")
+        QtWidgets.QApplication.processEvents()
+
+        type_label = self._type_combo.currentText()
+        cfg_type, _ = self.TYPE_MAP.get(type_label, ("openai", ""))
+
+        try:
+            if cfg_type == "openai":
+                test_url = f"{url}/v1/chat/completions"
+                headers = {"Content-Type": "application/json"}
+                if api_key:
+                    headers["Authorization"] = f"Bearer {api_key}"
+                body = {
+                    "model": model or "test",
+                    "messages": [{"role": "user", "content": "Say OK"}],
+                    "max_tokens": 5,
+                }
+                req = urllib.request.Request(
+                    test_url, data=json.dumps(body).encode(), headers=headers
+                )
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    result = json.loads(resp.read().decode())
+                    text = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    self._status_label.setText(f"Connected! Response: {text[:60]}")
+                    self._status_label.setStyleSheet(
+                        "color: #7ad67a; font-size: 10px; font-style: italic;")
+            elif cfg_type == "anthropic":
+                test_url = f"{url}/v1/messages"
+                headers = {
+                    "Content-Type": "application/json",
+                    "x-api-key": api_key or "test",
+                    "anthropic-version": "2023-06-01",
+                }
+                body = {
+                    "model": model or "test",
+                    "max_tokens": 5,
+                    "messages": [{"role": "user", "content": "Say OK"}],
+                }
+                req = urllib.request.Request(
+                    test_url, data=json.dumps(body).encode(), headers=headers
+                )
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    result = json.loads(resp.read().decode())
+                    text = result.get("content", [{}])[0].get("text", "")
+                    self._status_label.setText(f"Connected! Response: {text[:60]}")
+                    self._status_label.setStyleSheet(
+                        "color: #7ad67a; font-size: 10px; font-style: italic;")
+            else:
+                self._status_label.setText("Test not supported for this type yet.")
+        except Exception as e:
+            err = str(e)[:120]
+            self._status_label.setText(f"Connection failed: {err}")
+            self._status_label.setStyleSheet(
+                "color: #d67a7a; font-size: 10px; font-style: italic;")
+
+    def get_models(self):
+        """Return the edited custom models dict."""
+        return dict(self._edits)
+
+
 class ShaderStudio(QtWidgets.QMainWindow):
     """Main application window."""
 
@@ -12398,6 +17535,8 @@ class ShaderStudio(QtWidgets.QMainWindow):
         self.current_params_cache = {}  # Cache params when switching shaders
         self.is_fullscreen = False
         self.custom_shaders = {}  # User-defined custom shaders
+        self._ai_chat_history = []  # Chat message history for AI tab
+        self._ai_generated_shader_count = 0  # Counter for naming AI shaders
 
         # Enable drag and drop
         self.setAcceptDrops(True)
@@ -12479,10 +17618,20 @@ class ShaderStudio(QtWidgets.QMainWindow):
 
         # Primitive shapes dropdown
         self.primitive_combo = QtWidgets.QComboBox()
-        self.primitive_combo.addItems(["Load Primitive...", "Sphere", "Cube"])
+        self.primitive_combo.addItems(["Load Primitive...", "Cube", "Sphere"])
         self.primitive_combo.currentTextChanged.connect(self._load_primitive)
         self.primitive_combo.setFixedWidth(120)
         toolbar.addWidget(self.primitive_combo)
+
+        # Background color picker
+        self.bg_color_btn = QtWidgets.QPushButton()
+        self.bg_color_btn.setFixedSize(26, 26)
+        self.bg_color_btn.setToolTip("Viewport Background Color")
+        self.bg_color_btn.setStyleSheet(
+            "background-color: #1f1f1f; border: 2px solid #555; border-radius: 3px;"
+        )
+        self.bg_color_btn.clicked.connect(self._pick_bg_color)
+        toolbar.addWidget(self.bg_color_btn)
 
         toolbar.addStretch()
 
@@ -12502,9 +17651,202 @@ class ShaderStudio(QtWidgets.QMainWindow):
 
         left.addLayout(toolbar)
 
+        # Paint tools toolbar — all tools in a flow layout that wraps on overflow
+        self.paint_toolbar = QtWidgets.QWidget()
+        paint_tb_flow = FlowLayout(self.paint_toolbar, margin=4, h_spacing=3, v_spacing=3)
+
+        tool_btn_style = "font-size: 13px; padding: 4px 8px; min-width: 30px;"
+        self._tool_btn_style = tool_btn_style
+        self._tool_btn_active = "font-size: 13px; padding: 4px 8px; min-width: 30px; background-color: #5a9fff; color: #000;"
+
+        self._tool_buttons = {}
+
+        all_tools = [
+            ("none",        "\u25B2",   "Pointer (V)"),
+            ("pencil",      "\u270F",   "Pencil/Brush (B)"),
+            ("eraser",      "\u25FB",   "Eraser (E)"),
+            ("eyedropper",  "\u2740",   "Eyedropper (I)"),
+            ("line",        "\u2572",   "Line (L)"),
+            ("rect",        "\u25AD",   "Rectangle (U)"),
+            ("ellipse",     "\u25CB",   "Ellipse (O)"),
+            ("fill",        "\u25A3",   "Fill (G)"),
+            ("wand",        "\u2726",   "Magic Wand (W)"),
+            ("bg_erase",    "\u2B1A",   "Background Eraser (T)"),
+            ("text",        "T",        "Text (X)"),
+            ("smudge",      "\u261D",   "Smudge (S)"),
+            ("clone",       "\u2399",   "Clone Stamp (C)"),
+            ("blur_brush",  "\u25CC",   "Blur/Sharpen (F)"),
+            ("dodge_burn",  "\u25D1",   "Dodge/Burn (D)"),
+            ("polygon",     "\u2B21",   "Polygon/Star (P)"),
+            ("gradient",    "\u25C8",   "Gradient (H)"),
+            ("select_rect", "\u25A2",   "Marquee Select (M)"),
+            ("lasso",       "\u2740",   "Lasso (A)"),
+            ("transform",   "\u2B1C",   "Transform/Move (Q)"),
+            ("crop",        "\u2702",   "Crop (K)"),
+            ("liquify",     "\u224B",   "Liquify (J)"),
+            ("pen",         "\u2712",   "Pen Tool (N)"),
+        ]
+        for tool_id, icon, tooltip in all_tools:
+            btn = QtWidgets.QPushButton(icon)
+            btn.setToolTip(tooltip)
+            btn.setStyleSheet(tool_btn_style)
+            btn.setCheckable(True)
+            btn.clicked.connect(lambda checked, tid=tool_id: self._set_active_tool(tid))
+            paint_tb_flow.addWidget(btn)
+            self._tool_buttons[tool_id] = btn
+
+        # Deselect button at the end
+        deselect_btn = QtWidgets.QPushButton("Deselect")
+        deselect_btn.setStyleSheet("font-size: 10px; padding: 3px 6px;")
+        deselect_btn.setToolTip("Clear selection (Ctrl+D)")
+        deselect_btn.clicked.connect(self._deselect_all)
+        paint_tb_flow.addWidget(deselect_btn)
+
+        self._tool_buttons["none"].setChecked(True)
+
         # Canvas
         self.canvas = ShaderCanvas()
         left.addWidget(self.canvas, 1)
+
+        # Batch image navigation bar (hidden by default)
+        self._batch_files = []   # File paths from batch selection
+        self._batch_index = 0    # Currently displayed image index
+        self._batch_export_settings = {}  # Saved export settings (format, chain, etc.)
+        self._batch_paint_cache = {}  # Per-image paint surface cache {path: numpy_array}
+
+        self.batch_nav_bar = QtWidgets.QWidget()
+        batch_nav_layout = QtWidgets.QHBoxLayout(self.batch_nav_bar)
+        batch_nav_layout.setContentsMargins(4, 2, 4, 2)
+        batch_nav_layout.setSpacing(6)
+
+        self.batch_prev_btn = QtWidgets.QPushButton("<")
+        self.batch_prev_btn.setFixedWidth(30)
+        self.batch_prev_btn.setStyleSheet("font-weight: bold; font-size: 14px;")
+        self.batch_prev_btn.clicked.connect(self._batch_nav_prev)
+        batch_nav_layout.addWidget(self.batch_prev_btn)
+
+        self.batch_nav_label = QtWidgets.QLabel("0 / 0")
+        self.batch_nav_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.batch_nav_label.setStyleSheet("color: #ccc; font-size: 11px;")
+        batch_nav_layout.addWidget(self.batch_nav_label, 1)
+
+        self.batch_next_btn = QtWidgets.QPushButton(">")
+        self.batch_next_btn.setFixedWidth(30)
+        self.batch_next_btn.setStyleSheet("font-weight: bold; font-size: 14px;")
+        self.batch_next_btn.clicked.connect(self._batch_nav_next)
+        batch_nav_layout.addWidget(self.batch_next_btn)
+
+        self.batch_process_btn = QtWidgets.QPushButton("Process All")
+        self.batch_process_btn.setStyleSheet("background-color: #2d5a5a; font-size: 11px; padding: 3px 8px;")
+        self.batch_process_btn.clicked.connect(self._batch_nav_process_all)
+        batch_nav_layout.addWidget(self.batch_process_btn)
+
+        self.batch_nav_bar.hide()
+        left.addWidget(self.batch_nav_bar)
+
+        # ========== ANIMATION TIMELINE ==========
+        self.anim_timeline = QtWidgets.QWidget()
+        anim_main_layout = QtWidgets.QVBoxLayout(self.anim_timeline)
+        anim_main_layout.setContentsMargins(4, 2, 4, 2)
+        anim_main_layout.setSpacing(2)
+
+        # Top row: playback controls + options
+        anim_controls = QtWidgets.QHBoxLayout()
+        anim_controls.setSpacing(4)
+
+        self.anim_prev_btn = QtWidgets.QPushButton("◀")
+        self.anim_prev_btn.setFixedWidth(28)
+        self.anim_prev_btn.setStyleSheet("font-size: 12px; padding: 2px;")
+        self.anim_prev_btn.setToolTip("Previous Frame")
+        self.anim_prev_btn.clicked.connect(self._anim_prev_frame)
+        anim_controls.addWidget(self.anim_prev_btn)
+
+        self.anim_play_btn = QtWidgets.QPushButton("▶")
+        self.anim_play_btn.setFixedWidth(28)
+        self.anim_play_btn.setStyleSheet("font-size: 12px; padding: 2px; background-color: #2d5a2d;")
+        self.anim_play_btn.setToolTip("Play / Pause")
+        self.anim_play_btn.clicked.connect(self._toggle_anim_playback)
+        anim_controls.addWidget(self.anim_play_btn)
+
+        self.anim_next_btn = QtWidgets.QPushButton("▶|")
+        self.anim_next_btn.setFixedWidth(28)
+        self.anim_next_btn.setStyleSheet("font-size: 12px; padding: 2px;")
+        self.anim_next_btn.setToolTip("Next Frame")
+        self.anim_next_btn.clicked.connect(self._anim_next_frame)
+        anim_controls.addWidget(self.anim_next_btn)
+
+        anim_controls.addSpacing(6)
+
+        anim_controls.addWidget(QtWidgets.QLabel("FPS:"))
+        self.anim_fps_spin = QtWidgets.QSpinBox()
+        self.anim_fps_spin.setMinimum(1)
+        self.anim_fps_spin.setMaximum(60)
+        self.anim_fps_spin.setValue(12)
+        self.anim_fps_spin.setFixedWidth(50)
+        self.anim_fps_spin.setStyleSheet("font-size: 11px;")
+        self.anim_fps_spin.valueChanged.connect(self._on_anim_fps_changed)
+        anim_controls.addWidget(self.anim_fps_spin)
+
+        anim_controls.addSpacing(6)
+
+        self.anim_onion_cb = QtWidgets.QCheckBox("Onion")
+        self.anim_onion_cb.setStyleSheet("font-size: 10px; color: #aaa;")
+        self.anim_onion_cb.setToolTip("Onion Skin (show previous/next frames)")
+        self.anim_onion_cb.toggled.connect(self._on_onion_skin_toggled)
+        anim_controls.addWidget(self.anim_onion_cb)
+
+        anim_controls.addStretch()
+
+        self.anim_add_btn = QtWidgets.QPushButton("+")
+        self.anim_add_btn.setFixedWidth(24)
+        self.anim_add_btn.setStyleSheet("font-size: 13px; padding: 1px; background-color: #2d5a2d;")
+        self.anim_add_btn.setToolTip("Add Frame")
+        self.anim_add_btn.clicked.connect(self._add_anim_frame)
+        anim_controls.addWidget(self.anim_add_btn)
+
+        self.anim_dup_btn = QtWidgets.QPushButton("⧉")
+        self.anim_dup_btn.setFixedWidth(24)
+        self.anim_dup_btn.setStyleSheet("font-size: 13px; padding: 1px;")
+        self.anim_dup_btn.setToolTip("Duplicate Frame")
+        self.anim_dup_btn.clicked.connect(self._dup_anim_frame)
+        anim_controls.addWidget(self.anim_dup_btn)
+
+        self.anim_del_btn = QtWidgets.QPushButton("−")
+        self.anim_del_btn.setFixedWidth(24)
+        self.anim_del_btn.setStyleSheet("font-size: 13px; padding: 1px; background-color: #5a2d2d;")
+        self.anim_del_btn.setToolTip("Delete Frame")
+        self.anim_del_btn.clicked.connect(self._del_anim_frame)
+        anim_controls.addWidget(self.anim_del_btn)
+
+        anim_main_layout.addLayout(anim_controls)
+
+        # Bottom row: scrollable frame strip
+        frame_strip_scroll = QtWidgets.QScrollArea()
+        frame_strip_scroll.setWidgetResizable(True)
+        frame_strip_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        frame_strip_scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        frame_strip_scroll.setFixedHeight(36)
+        frame_strip_scroll.setStyleSheet("""
+            QScrollArea { border: 1px solid #444; background: #1e1e1e; }
+            QScrollBar:horizontal { height: 8px; background: #1e1e1e; }
+            QScrollBar::handle:horizontal { background: #555; border-radius: 4px; }
+        """)
+        self._frame_strip_container = QtWidgets.QWidget()
+        self._frame_strip_layout = QtWidgets.QHBoxLayout(self._frame_strip_container)
+        self._frame_strip_layout.setContentsMargins(2, 2, 2, 2)
+        self._frame_strip_layout.setSpacing(2)
+        self._frame_strip_layout.addStretch()
+        frame_strip_scroll.setWidget(self._frame_strip_container)
+        anim_main_layout.addWidget(frame_strip_scroll)
+
+        # Frame info label
+        self.anim_frame_label = QtWidgets.QLabel("Frame 1 / 1")
+        self.anim_frame_label.setStyleSheet("color: #888; font-size: 10px;")
+        self.anim_frame_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        anim_main_layout.addWidget(self.anim_frame_label)
+
+        self.anim_timeline.hide()
+        left.addWidget(self.anim_timeline)
 
         # Histogram panel (hidden by default)
         self.histogram_widget = HistogramWidget()
@@ -12517,52 +17859,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         self._hist_timer.setInterval(100)
         self._hist_timer.timeout.connect(self._do_update_histogram)
 
-        # 3D Controls (hidden by default)
-        self.controls_3d = QtWidgets.QWidget()
-        controls_layout = QtWidgets.QHBoxLayout(self.controls_3d)
-        controls_layout.setContentsMargins(0, 5, 0, 0)
-
-        # Auto-rotate checkbox
-        self.auto_rotate_cb = QtWidgets.QCheckBox("Auto Rotate")
-        self.auto_rotate_cb.toggled.connect(self._toggle_auto_rotate)
-        controls_layout.addWidget(self.auto_rotate_cb)
-
-        # Rotation speed
-        controls_layout.addWidget(QtWidgets.QLabel("Speed:"))
-        self.speed_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        self.speed_slider.setRange(1, 50)
-        self.speed_slider.setValue(10)
-        self.speed_slider.setFixedWidth(80)
-        self.speed_slider.valueChanged.connect(self._update_rotation_speed)
-        controls_layout.addWidget(self.speed_slider)
-
-        # Zoom
-        controls_layout.addWidget(QtWidgets.QLabel("Zoom:"))
-        self.zoom_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        self.zoom_slider.setRange(10, 100)
-        self.zoom_slider.setValue(25)
-        self.zoom_slider.setFixedWidth(80)
-        self.zoom_slider.valueChanged.connect(self._update_zoom)
-        controls_layout.addWidget(self.zoom_slider)
-
-        # Render pass selector
-        controls_layout.addWidget(QtWidgets.QLabel("Pass:"))
-        self.render_pass_combo = QtWidgets.QComboBox()
-        self.render_pass_combo.addItems(["Combined", "Normals", "Depth", "Diffuse", "AO"])
-        self.render_pass_combo.setFixedWidth(100)
-        self.render_pass_combo.currentTextChanged.connect(self._on_render_pass_changed)
-        controls_layout.addWidget(self.render_pass_combo)
-
-        # Export all passes button
-        export_passes_btn = QtWidgets.QPushButton("Export Passes")
-        export_passes_btn.setStyleSheet("font-size: 11px; padding: 3px 6px;")
-        export_passes_btn.setToolTip("Export all render passes (Combined, Normals, Depth, Diffuse, AO) as separate PNG files")
-        export_passes_btn.clicked.connect(self._export_all_passes)
-        controls_layout.addWidget(export_passes_btn)
-
-        controls_layout.addStretch()
-        self.controls_3d.hide()
-        left.addWidget(self.controls_3d)
+        # 3D camera/lighting controls are in the "Cameras & Lighting" tab
 
         # Add left widget to splitter
         self.main_splitter.addWidget(left_widget)
@@ -12576,7 +17873,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         insp_layout.setContentsMargins(10, 10, 10, 10)
 
         # Title
-        title = QtWidgets.QLabel("Shader Inspector")
+        title = QtWidgets.QLabel("Shaders")
         title.setStyleSheet("font-size: 16px; font-weight: bold; color: #fff;")
         insp_layout.addWidget(title)
 
@@ -12611,265 +17908,1534 @@ class ShaderStudio(QtWidgets.QMainWindow):
         self.gif_controls.hide()
         insp_layout.addWidget(self.gif_controls)
 
-        # Separator
-        line = QtWidgets.QFrame()
-        line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        line.setStyleSheet("background-color: #444;")
-        insp_layout.addWidget(line)
+        # --- Tab system: Inspector + Layers ---
+        self.inspector_tabs = QtWidgets.QTabWidget()
+        self.inspector_tabs.setStyleSheet("""
+            QTabWidget::pane { border: 1px solid #444; background: #252525; }
+            QTabBar::tab { background: #2a2a2a; color: #aaa; padding: 6px 16px;
+                           border: 1px solid #444; border-bottom: none; font-size: 11px; }
+            QTabBar::tab:selected { background: #353535; color: #fff; }
+            QTabBar::tab:hover { background: #333; }
+        """)
+        insp_layout.addWidget(self.inspector_tabs, 1)
+
+        # ========== INSPECTOR TAB ==========
+        inspector_tab = QtWidgets.QWidget()
+        insp_tab_scroll = QtWidgets.QScrollArea()
+        insp_tab_scroll.setWidgetResizable(True)
+        insp_tab_scroll.setStyleSheet("QScrollArea { border: none; background: #252525; }")
+        insp_tab_scroll.setWidget(inspector_tab)
+        insp_tab_layout = QtWidgets.QVBoxLayout(inspector_tab)
+        insp_tab_layout.setContentsMargins(5, 5, 5, 5)
 
         # Shader selection
         shader_row = QtWidgets.QHBoxLayout()
         shader_row.addWidget(QtWidgets.QLabel("Shader:"))
         self.shader_combo = QtWidgets.QComboBox()
-        self.shader_combo.addItems(SHADERS.keys())
+        self.shader_combo.addItems(sorted(SHADERS.keys()))
         self.shader_combo.currentTextChanged.connect(self._on_shader_changed)
         shader_row.addWidget(self.shader_combo)
-        insp_layout.addLayout(shader_row)
+        insp_tab_layout.addLayout(shader_row)
 
-        # AI Model selector
-        ai_row = QtWidgets.QHBoxLayout()
-        ai_row.addWidget(QtWidgets.QLabel("Model:"))
-        self.ai_model_combo = QtWidgets.QComboBox()
-        self.ai_model_combo.addItem("Select AI Model")  # Default placeholder
-        self.ai_model_combo.addItems(AI_MODELS.keys())
-        self.ai_model_combo.currentTextChanged.connect(self._on_ai_model_changed)
-        ai_row.addWidget(self.ai_model_combo)
-        insp_layout.addLayout(ai_row)
-
-        # AI Prompt container (hidden by default until model is selected)
-        self.ai_prompt_container = QtWidgets.QWidget()
-        ai_prompt_layout = QtWidgets.QVBoxLayout(self.ai_prompt_container)
-        ai_prompt_layout.setContentsMargins(0, 0, 0, 0)
-
-        # AI Prompt input
-        prompt_label = QtWidgets.QLabel("Describe the effect you want:")
-        prompt_label.setStyleSheet("color: #aaa; font-size: 11px; margin-top: 4px;")
-        ai_prompt_layout.addWidget(prompt_label)
-
-        self.ai_prompt_input = QtWidgets.QTextEdit()
-        self.ai_prompt_input.setPlaceholderText("Example: Apply an outline shader that detects edges and creates a sketch-like effect with thick black lines...")
-        self.ai_prompt_input.setMaximumHeight(80)
-        self.ai_prompt_input.setStyleSheet("""
-            QTextEdit {
-                background-color: #2a2a2a;
-                border: 1px solid #444;
-                border-radius: 4px;
-                padding: 5px;
-                color: #ddd;
-                font-size: 11px;
-            }
-            QTextEdit:focus {
-                border-color: #4a6fa5;
-            }
-        """)
-        ai_prompt_layout.addWidget(self.ai_prompt_input)
-
-        # AI Action buttons row
-        ai_btn_row = QtWidgets.QHBoxLayout()
-
-        generate_ai_btn = QtWidgets.QPushButton("Generate Effect")
-        generate_ai_btn.clicked.connect(self._generate_ai_effect)
-        generate_ai_btn.setStyleSheet("background-color: #4a6fa5; font-weight: bold;")
-        generate_ai_btn.setToolTip("Use AI to interpret your prompt and apply shader effects")
-        ai_btn_row.addWidget(generate_ai_btn)
-
-        suggest_ai_btn = QtWidgets.QPushButton("Suggest")
-        suggest_ai_btn.setFixedWidth(70)
-        suggest_ai_btn.clicked.connect(self._suggest_ai_prompts)
-        suggest_ai_btn.setStyleSheet("background-color: #3d5a3d;")
-        suggest_ai_btn.setToolTip("Get AI-powered suggestions for effects")
-        ai_btn_row.addWidget(suggest_ai_btn)
-
-        ai_prompt_layout.addLayout(ai_btn_row)
-
-        # AI Response/Status
+        # Hidden dummy label for backward compatibility with existing AI methods
         self.ai_response_label = QtWidgets.QLabel("")
-        self.ai_response_label.setWordWrap(True)
-        self.ai_response_label.setStyleSheet("color: #7aa2d6; font-style: italic; padding: 2px 0; font-size: 10px;")
-        self.ai_response_label.setMaximumHeight(60)
-        ai_prompt_layout.addWidget(self.ai_response_label)
+        self.ai_response_label.hide()
 
-        # Hide the prompt container by default
-        self.ai_prompt_container.hide()
-        insp_layout.addWidget(self.ai_prompt_container)
-
-        # Custom preset selection (for user presets)
+        # Preset selection
         preset_row = QtWidgets.QHBoxLayout()
         preset_row.addWidget(QtWidgets.QLabel("Preset:"))
         self.preset_combo = QtWidgets.QComboBox()
         self._refresh_preset_combo()
         self.preset_combo.currentTextChanged.connect(self._load_user_preset)
         preset_row.addWidget(self.preset_combo)
-        insp_layout.addLayout(preset_row)
+        insp_tab_layout.addLayout(preset_row)
 
         # Description
         self.description = QtWidgets.QLabel("")
         self.description.setWordWrap(True)
         self.description.setStyleSheet("color: #888; font-style: italic; padding: 5px 0;")
-        insp_layout.addWidget(self.description)
+        insp_tab_layout.addWidget(self.description)
 
         # Parameters section
         params_label = QtWidgets.QLabel("Parameters")
         params_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #fff;")
-        insp_layout.addWidget(params_label)
+        insp_tab_layout.addWidget(params_label)
 
-        # Scroll area for parameters
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet("QScrollArea { border: none; }")
-
         self.params_widget = QtWidgets.QWidget()
         self.params_layout = QtWidgets.QVBoxLayout(self.params_widget)
         self.params_layout.setContentsMargins(0, 0, 0, 0)
         self.params_layout.addStretch()
         scroll.setWidget(self.params_widget)
-        insp_layout.addWidget(scroll, 1)
+        insp_tab_layout.addWidget(scroll, 1)
 
+        # --- Lighting Controls (3D mode only) ---
+        self._lighting_group = QtWidgets.QGroupBox("Lighting")
+        self._lighting_group.setStyleSheet("""
+            QGroupBox { font-size: 12px; font-weight: bold; color: #ddd;
+                        border: 1px solid #555; border-radius: 4px;
+                        margin-top: 6px; padding-top: 14px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 8px; }
+        """)
+        self._light_controls_layout = QtWidgets.QVBoxLayout(self._lighting_group)
+        self._light_controls_layout.setContentsMargins(4, 4, 4, 4)
+        self._light_controls_layout.setSpacing(2)
+        self._light_sliders = []
+        self._rebuild_lighting_ui()
+        # Lighting group visibility is managed by _light_container (created later)
+        # Lighting group is added to the Cameras & Lighting tab (not here)
 
-
-        # Compact button style for inspector controls
         compact_btn = "font-size: 11px; padding: 3px 6px;"
 
         # Preset management buttons
         preset_btns = QtWidgets.QHBoxLayout()
         preset_btns.setSpacing(4)
-
         save_preset_btn = QtWidgets.QPushButton("Save Preset")
         save_preset_btn.clicked.connect(self._save_preset)
         save_preset_btn.setStyleSheet(f"background-color: #5a5a2d; {compact_btn}")
         preset_btns.addWidget(save_preset_btn)
-
         delete_preset_btn = QtWidgets.QPushButton("Delete Preset")
         delete_preset_btn.clicked.connect(self._delete_preset)
         delete_preset_btn.setStyleSheet(f"background-color: #5a2d2d; {compact_btn}")
         preset_btns.addWidget(delete_preset_btn)
-
         reset_btn = QtWidgets.QPushButton("Reset")
         reset_btn.clicked.connect(self._reset_params)
         reset_btn.setStyleSheet(compact_btn)
         reset_btn.setToolTip("Reset to Defaults")
         preset_btns.addWidget(reset_btn)
+        insp_tab_layout.addLayout(preset_btns)
 
-        insp_layout.addLayout(preset_btns)
-
-        # Export buttons row
+        # Export buttons
         export_row = QtWidgets.QHBoxLayout()
         export_row.setSpacing(4)
-
         export_btn = QtWidgets.QPushButton("Export")
         export_btn.clicked.connect(self.export_image)
         export_btn.setStyleSheet(f"background-color: #2d5a2d; {compact_btn}")
         export_row.addWidget(export_btn)
-
         batch_btn = QtWidgets.QPushButton("Batch")
         batch_btn.clicked.connect(self.batch_process)
         batch_btn.setStyleSheet(f"background-color: #2d5a5a; {compact_btn}")
         export_row.addWidget(batch_btn)
-
         upscale_btn = QtWidgets.QPushButton("Upscale")
         upscale_btn.clicked.connect(self.upscale_image)
         upscale_btn.setStyleSheet(f"background-color: #5a2d5a; {compact_btn}")
         export_row.addWidget(upscale_btn)
+        insp_tab_layout.addLayout(export_row)
 
-        insp_layout.addLayout(export_row)
-
-        # Bake Pass section
+        # Bake / Undo / Redo
         bake_sep = QtWidgets.QFrame()
         bake_sep.setFrameShape(QtWidgets.QFrame.Shape.HLine)
         bake_sep.setStyleSheet("background-color: #444;")
-        insp_layout.addWidget(bake_sep)
-
-        bake_label = QtWidgets.QLabel("Shader Chain")
-        bake_label.setStyleSheet("font-size: 11px; font-weight: bold; color: #fff;")
-        insp_layout.addWidget(bake_label)
+        insp_tab_layout.addWidget(bake_sep)
 
         tiny_btn = "font-size: 11px; padding: 2px 4px;"
-
         bake_row = QtWidgets.QHBoxLayout()
         bake_row.setSpacing(3)
-
-        self.bake_pass_btn = QtWidgets.QPushButton("Bake")
-        self.bake_pass_btn.clicked.connect(self._bake_or_update)
+        self.bake_pass_btn = QtWidgets.QPushButton("Add Layer")
+        self.bake_pass_btn.clicked.connect(self._add_layer)
         self.bake_pass_btn.setStyleSheet(f"background-color: #5a4a2d; {tiny_btn}")
-        self.bake_pass_btn.setToolTip("Bake Pass — Commit the current shader effect and start a new pass on top")
+        self.bake_pass_btn.setToolTip("Add current shader as a new layer")
         bake_row.addWidget(self.bake_pass_btn)
-
         self.reset_chain_btn = QtWidgets.QPushButton("Reset")
         self.reset_chain_btn.clicked.connect(self._reset_chain)
         self.reset_chain_btn.setStyleSheet(f"background-color: #5a2d2d; {tiny_btn}")
-        self.reset_chain_btn.setToolTip("Reset Chain — Reload the original image and clear the shader chain")
+        self.reset_chain_btn.setToolTip("Reset — Reload original image and clear all layers")
         bake_row.addWidget(self.reset_chain_btn)
-
         self.undo_btn = QtWidgets.QPushButton("Undo")
         self.undo_btn.clicked.connect(self._undo)
         self.undo_btn.setEnabled(False)
         self.undo_btn.setStyleSheet(tiny_btn)
         bake_row.addWidget(self.undo_btn)
-
         self.redo_btn = QtWidgets.QPushButton("Redo")
         self.redo_btn.clicked.connect(self._redo)
         self.redo_btn.setEnabled(False)
         self.redo_btn.setStyleSheet(tiny_btn)
         bake_row.addWidget(self.redo_btn)
+        insp_tab_layout.addLayout(bake_row)
 
-        insp_layout.addLayout(bake_row)
-
-        self.chain_display_label = QtWidgets.QLabel("No chain")
-        self.chain_display_label.setWordWrap(True)
-        self.chain_display_label.setStyleSheet("color: #aaa; font-size: 10px; padding: 1px;")
-        insp_layout.addWidget(self.chain_display_label)
-
-        # Adjustment layer list for bake chain
+        # Keep chain display for backward compat (hidden)
+        self.chain_display_label = QtWidgets.QLabel("")
+        self.chain_display_label.hide()
+        insp_tab_layout.addWidget(self.chain_display_label)
         self.chain_list_widget = QtWidgets.QListWidget()
-        self.chain_list_widget.setMaximumHeight(150)
-        self.chain_list_widget.setStyleSheet("""
-            QListWidget { background-color: #1e1e1e; border: 1px solid #444; font-size: 10px; }
-            QListWidget::item { padding: 2px; border-bottom: 1px solid #333; }
-            QListWidget::item:selected { background-color: #3a4a5a; }
-        """)
         self.chain_list_widget.hide()
-        insp_layout.addWidget(self.chain_list_widget)
-
-        # Edit mode state
+        insp_tab_layout.addWidget(self.chain_list_widget)
         self._editing_chain_index = None
 
-        # Tools row (color picker, randomize, copy/paste)
+        # Tools row
         tools_row = QtWidgets.QHBoxLayout()
-
         color_picker_btn = QtWidgets.QPushButton("🎨")
-        color_picker_btn.setToolTip("Color Picker (click on image to sample color)")
+        color_picker_btn.setToolTip("Color Picker")
         color_picker_btn.setFixedWidth(35)
         color_picker_btn.clicked.connect(self._enable_color_picker)
         tools_row.addWidget(color_picker_btn)
-
         randomize_btn = QtWidgets.QPushButton("🎲")
-        randomize_btn.setToolTip("Randomize Parameters (Ctrl+R)")
+        randomize_btn.setToolTip("Randomize Parameters")
         randomize_btn.setFixedWidth(35)
         randomize_btn.clicked.connect(self._randomize_params)
         tools_row.addWidget(randomize_btn)
-
         copy_btn = QtWidgets.QPushButton("📋")
-        copy_btn.setToolTip("Copy Parameters (Ctrl+C)")
+        copy_btn.setToolTip("Copy Parameters")
         copy_btn.setFixedWidth(35)
         copy_btn.clicked.connect(self._copy_params)
         tools_row.addWidget(copy_btn)
-
         paste_btn = QtWidgets.QPushButton("📥")
-        paste_btn.setToolTip("Paste Parameters (Ctrl+V)")
+        paste_btn.setToolTip("Paste Parameters")
         paste_btn.setFixedWidth(35)
         paste_btn.clicked.connect(self._paste_params)
         tools_row.addWidget(paste_btn)
-
         tools_row.addStretch()
-        insp_layout.addLayout(tools_row)
+        insp_tab_layout.addLayout(tools_row)
 
-        # Color display (for color picker)
         self.color_display = QtWidgets.QLabel("")
         self.color_display.setFixedHeight(30)
         self.color_display.setStyleSheet("background-color: #333; border: 1px solid #555; border-radius: 4px;")
         self.color_display.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.color_display.hide()
-        insp_layout.addWidget(self.color_display)
+        insp_tab_layout.addWidget(self.color_display)
+
+        # Paint Tool Options
+        paint_sep = QtWidgets.QFrame()
+        paint_sep.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+        paint_sep.setStyleSheet("background-color: #444;")
+        self._paint_options_widget = QtWidgets.QWidget()
+        paint_opts_layout = QtWidgets.QVBoxLayout(self._paint_options_widget)
+        paint_opts_layout.setContentsMargins(0, 4, 0, 4)
+        paint_opts_layout.setSpacing(4)
+        color_row = QtWidgets.QHBoxLayout()
+        color_row.addWidget(QtWidgets.QLabel("Color:"))
+        self._paint_color_btn = QtWidgets.QPushButton("")
+        self._paint_color_btn.setStyleSheet("background-color: rgb(255, 0, 0); border: 2px solid #888; min-height: 24px;")
+        self._paint_color_btn.setToolTip("Click to pick paint color")
+        self._paint_color_btn.clicked.connect(self._pick_paint_color)
+        color_row.addWidget(self._paint_color_btn)
+        paint_opts_layout.addLayout(color_row)
+
+        # --- Color palette / swatches grid ---
+        self._swatch_grid = QtWidgets.QWidget()
+        swatch_grid_layout = QtWidgets.QGridLayout(self._swatch_grid)
+        swatch_grid_layout.setContentsMargins(0, 2, 0, 2)
+        swatch_grid_layout.setSpacing(2)
+        self._swatch_buttons = []
+        self._rebuild_swatch_grid()
+        paint_opts_layout.addWidget(self._swatch_grid)
+
+        # Add/remove swatch buttons
+        swatch_btn_row = QtWidgets.QHBoxLayout()
+        add_swatch_btn = QtWidgets.QPushButton("+")
+        add_swatch_btn.setToolTip("Add current color to palette")
+        add_swatch_btn.setFixedWidth(24)
+        add_swatch_btn.setFixedHeight(20)
+        add_swatch_btn.setStyleSheet("font-size: 12px; padding: 0px;")
+        add_swatch_btn.clicked.connect(self._add_color_swatch)
+        swatch_btn_row.addWidget(add_swatch_btn)
+        del_swatch_btn = QtWidgets.QPushButton("-")
+        del_swatch_btn.setToolTip("Remove last swatch")
+        del_swatch_btn.setFixedWidth(24)
+        del_swatch_btn.setFixedHeight(20)
+        del_swatch_btn.setStyleSheet("font-size: 12px; padding: 0px;")
+        del_swatch_btn.clicked.connect(self._remove_color_swatch)
+        swatch_btn_row.addWidget(del_swatch_btn)
+        swatch_btn_row.addStretch()
+        paint_opts_layout.addLayout(swatch_btn_row)
+
+        # --- Color harmony buttons ---
+        harmony_row = QtWidgets.QHBoxLayout()
+        for htype, label in [("complementary", "Comp"), ("triadic", "Triad"),
+                              ("analogous", "Analog"), ("split_complementary", "Split"),
+                              ("tetradic", "Tetrad")]:
+            hbtn = QtWidgets.QPushButton(label)
+            hbtn.setFixedHeight(18)
+            hbtn.setStyleSheet("font-size: 9px; padding: 1px 3px;")
+            hbtn.setToolTip(f"Generate {htype} harmony colors")
+            hbtn.clicked.connect(lambda checked, ht=htype: self._generate_harmony(ht))
+            harmony_row.addWidget(hbtn)
+        paint_opts_layout.addLayout(harmony_row)
+
+        size_row = QtWidgets.QHBoxLayout()
+        size_row.addWidget(QtWidgets.QLabel("Size:"))
+        self._brush_size_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._brush_size_slider.setMinimum(1)
+        self._brush_size_slider.setMaximum(200)
+        self._brush_size_slider.setValue(7)
+        self._brush_size_slider.valueChanged.connect(self._on_brush_size_changed)
+        size_row.addWidget(self._brush_size_slider)
+        self._brush_size_label = QtWidgets.QLabel("7px")
+        self._brush_size_label.setFixedWidth(30)
+        self._brush_size_label.setStyleSheet("color: #aaa; font-size: 10px;")
+        size_row.addWidget(self._brush_size_label)
+        paint_opts_layout.addLayout(size_row)
+        opacity_row = QtWidgets.QHBoxLayout()
+        opacity_row.addWidget(QtWidgets.QLabel("Opacity:"))
+        self._opacity_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._opacity_slider.setMinimum(1)
+        self._opacity_slider.setMaximum(255)
+        self._opacity_slider.setValue(255)
+        self._opacity_slider.valueChanged.connect(self._on_brush_opacity_changed)
+        opacity_row.addWidget(self._opacity_slider)
+        self._opacity_label = QtWidgets.QLabel("255")
+        self._opacity_label.setFixedWidth(30)
+        self._opacity_label.setStyleSheet("color: #aaa; font-size: 10px;")
+        opacity_row.addWidget(self._opacity_label)
+        paint_opts_layout.addLayout(opacity_row)
+
+        # --- Pressure sensitivity controls ---
+        self._pressure_row = QtWidgets.QWidget()
+        pressure_layout = QtWidgets.QHBoxLayout(self._pressure_row)
+        pressure_layout.setContentsMargins(0, 0, 0, 0)
+        self._pressure_size_cb = QtWidgets.QCheckBox("P→Size")
+        self._pressure_size_cb.setChecked(True)
+        self._pressure_size_cb.setStyleSheet("font-size: 10px; color: #aaa;")
+        self._pressure_size_cb.toggled.connect(lambda v: setattr(self.canvas, '_pressure_affects_size', v))
+        pressure_layout.addWidget(self._pressure_size_cb)
+        self._pressure_opacity_cb = QtWidgets.QCheckBox("P→Opacity")
+        self._pressure_opacity_cb.setChecked(True)
+        self._pressure_opacity_cb.setStyleSheet("font-size: 10px; color: #aaa;")
+        self._pressure_opacity_cb.toggled.connect(lambda v: setattr(self.canvas, '_pressure_affects_opacity', v))
+        pressure_layout.addWidget(self._pressure_opacity_cb)
+        paint_opts_layout.addWidget(self._pressure_row)
+
+        self._tolerance_row = QtWidgets.QWidget()
+        tol_layout = QtWidgets.QHBoxLayout(self._tolerance_row)
+        tol_layout.setContentsMargins(0, 0, 0, 0)
+        tol_layout.addWidget(QtWidgets.QLabel("Tolerance:"))
+        self._tolerance_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._tolerance_slider.setMinimum(0)
+        self._tolerance_slider.setMaximum(255)
+        self._tolerance_slider.setValue(32)
+        self._tolerance_slider.valueChanged.connect(self._on_tolerance_changed)
+        tol_layout.addWidget(self._tolerance_slider)
+        self._tolerance_label = QtWidgets.QLabel("32")
+        self._tolerance_label.setFixedWidth(30)
+        self._tolerance_label.setStyleSheet("color: #aaa; font-size: 10px;")
+        tol_layout.addWidget(self._tolerance_label)
+        self._tolerance_row.hide()
+        paint_opts_layout.addWidget(self._tolerance_row)
+        self._fill_mode_row = QtWidgets.QWidget()
+        fill_layout = QtWidgets.QHBoxLayout(self._fill_mode_row)
+        fill_layout.setContentsMargins(0, 0, 0, 0)
+        fill_layout.addWidget(QtWidgets.QLabel("Fill:"))
+        self._fill_mode_combo = QtWidgets.QComboBox()
+        self._fill_mode_combo.addItems(sorted(["filled", "outline"]))
+        self._fill_mode_combo.currentTextChanged.connect(self._on_fill_mode_changed)
+        fill_layout.addWidget(self._fill_mode_combo)
+        self._fill_mode_row.hide()
+        paint_opts_layout.addWidget(self._fill_mode_row)
+
+        # --- Hardness slider ---
+        self._hardness_row = QtWidgets.QWidget()
+        hard_layout = QtWidgets.QHBoxLayout(self._hardness_row)
+        hard_layout.setContentsMargins(0, 0, 0, 0)
+        hard_layout.addWidget(QtWidgets.QLabel("Hardness:"))
+        self._hardness_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._hardness_slider.setMinimum(0)
+        self._hardness_slider.setMaximum(100)
+        self._hardness_slider.setValue(100)
+        self._hardness_slider.valueChanged.connect(self._on_hardness_changed)
+        hard_layout.addWidget(self._hardness_slider)
+        self._hardness_label = QtWidgets.QLabel("100%")
+        self._hardness_label.setFixedWidth(35)
+        self._hardness_label.setStyleSheet("color: #aaa; font-size: 10px;")
+        hard_layout.addWidget(self._hardness_label)
+        self._hardness_row.hide()
+        paint_opts_layout.addWidget(self._hardness_row)
+
+        # --- Brush tip combo ---
+        self._tip_row = QtWidgets.QWidget()
+        tip_layout = QtWidgets.QHBoxLayout(self._tip_row)
+        tip_layout.setContentsMargins(0, 0, 0, 0)
+        tip_layout.addWidget(QtWidgets.QLabel("Tip:"))
+        self._tip_combo = QtWidgets.QComboBox()
+        self._tip_combo.addItems(["Round", "Square", "Diamond"])
+        self._tip_combo.currentTextChanged.connect(self._on_tip_changed)
+        tip_layout.addWidget(self._tip_combo)
+        self._tip_row.hide()
+        paint_opts_layout.addWidget(self._tip_row)
+
+        # --- Spacing slider ---
+        self._spacing_row = QtWidgets.QWidget()
+        spac_layout = QtWidgets.QHBoxLayout(self._spacing_row)
+        spac_layout.setContentsMargins(0, 0, 0, 0)
+        spac_layout.addWidget(QtWidgets.QLabel("Spacing:"))
+        self._spacing_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._spacing_slider.setMinimum(5)
+        self._spacing_slider.setMaximum(100)
+        self._spacing_slider.setValue(25)
+        self._spacing_slider.valueChanged.connect(self._on_spacing_changed)
+        spac_layout.addWidget(self._spacing_slider)
+        self._spacing_label = QtWidgets.QLabel("25%")
+        self._spacing_label.setFixedWidth(35)
+        self._spacing_label.setStyleSheet("color: #aaa; font-size: 10px;")
+        spac_layout.addWidget(self._spacing_label)
+        self._spacing_row.hide()
+        paint_opts_layout.addWidget(self._spacing_row)
+
+        # --- Scatter slider ---
+        self._scatter_row = QtWidgets.QWidget()
+        scat_layout = QtWidgets.QHBoxLayout(self._scatter_row)
+        scat_layout.setContentsMargins(0, 0, 0, 0)
+        scat_layout.addWidget(QtWidgets.QLabel("Scatter:"))
+        self._scatter_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._scatter_slider.setMinimum(0)
+        self._scatter_slider.setMaximum(100)
+        self._scatter_slider.setValue(0)
+        self._scatter_slider.valueChanged.connect(self._on_scatter_changed)
+        scat_layout.addWidget(self._scatter_slider)
+        self._scatter_label = QtWidgets.QLabel("0%")
+        self._scatter_label.setFixedWidth(35)
+        self._scatter_label.setStyleSheet("color: #aaa; font-size: 10px;")
+        scat_layout.addWidget(self._scatter_label)
+        self._scatter_row.hide()
+        paint_opts_layout.addWidget(self._scatter_row)
+
+        # --- Gradient options ---
+        self._gradient_row = QtWidgets.QWidget()
+        grad_layout = QtWidgets.QHBoxLayout(self._gradient_row)
+        grad_layout.setContentsMargins(0, 0, 0, 0)
+        grad_layout.addWidget(QtWidgets.QLabel("Gradient:"))
+        self._gradient_type_combo = QtWidgets.QComboBox()
+        self._gradient_type_combo.addItems(["Linear", "Radial", "Angular"])
+        self._gradient_type_combo.currentTextChanged.connect(self._on_gradient_type_changed)
+        grad_layout.addWidget(self._gradient_type_combo)
+        self._gradient_color2_btn = QtWidgets.QPushButton("")
+        self._gradient_color2_btn.setStyleSheet("background-color: rgb(0, 0, 255); border: 2px solid #888; min-height: 20px; min-width: 30px;")
+        self._gradient_color2_btn.setToolTip("Second gradient color")
+        self._gradient_color2_btn.clicked.connect(self._pick_gradient_color2)
+        grad_layout.addWidget(self._gradient_color2_btn)
+        self._gradient_row.hide()
+        paint_opts_layout.addWidget(self._gradient_row)
+
+        # --- Clone stamp info ---
+        self._clone_row = QtWidgets.QWidget()
+        clone_layout = QtWidgets.QHBoxLayout(self._clone_row)
+        clone_layout.setContentsMargins(0, 0, 0, 0)
+        self._clone_info_label = QtWidgets.QLabel("Alt+Click to set source")
+        self._clone_info_label.setStyleSheet("color: #ff9; font-size: 10px; font-style: italic;")
+        clone_layout.addWidget(self._clone_info_label)
+        self._clone_row.hide()
+        paint_opts_layout.addWidget(self._clone_row)
+
+        # --- Blur strength ---
+        self._blur_row = QtWidgets.QWidget()
+        blur_layout = QtWidgets.QHBoxLayout(self._blur_row)
+        blur_layout.setContentsMargins(0, 0, 0, 0)
+        blur_layout.addWidget(QtWidgets.QLabel("Strength:"))
+        self._blur_strength_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._blur_strength_slider.setMinimum(1)
+        self._blur_strength_slider.setMaximum(20)
+        self._blur_strength_slider.setValue(5)
+        self._blur_strength_slider.valueChanged.connect(self._on_blur_strength_changed)
+        blur_layout.addWidget(self._blur_strength_slider)
+        self._sharpen_toggle = QtWidgets.QCheckBox("Sharpen")
+        self._sharpen_toggle.setStyleSheet("font-size: 10px; color: #aaa;")
+        self._sharpen_toggle.toggled.connect(lambda v: setattr(self.canvas, '_sharpen_mode', v))
+        blur_layout.addWidget(self._sharpen_toggle)
+        self._blur_row.hide()
+        paint_opts_layout.addWidget(self._blur_row)
+
+        # --- Dodge/Burn mode ---
+        self._dodge_burn_row = QtWidgets.QWidget()
+        db_layout = QtWidgets.QHBoxLayout(self._dodge_burn_row)
+        db_layout.setContentsMargins(0, 0, 0, 0)
+        db_layout.addWidget(QtWidgets.QLabel("Mode:"))
+        self._dodge_burn_combo = QtWidgets.QComboBox()
+        self._dodge_burn_combo.addItems(["Dodge", "Burn"])
+        self._dodge_burn_combo.currentTextChanged.connect(self._on_dodge_burn_mode_changed)
+        db_layout.addWidget(self._dodge_burn_combo)
+        db_layout.addWidget(QtWidgets.QLabel("Exp:"))
+        self._exposure_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._exposure_slider.setMinimum(1)
+        self._exposure_slider.setMaximum(100)
+        self._exposure_slider.setValue(50)
+        self._exposure_slider.valueChanged.connect(self._on_exposure_changed)
+        db_layout.addWidget(self._exposure_slider)
+        self._dodge_burn_row.hide()
+        paint_opts_layout.addWidget(self._dodge_burn_row)
+
+        # --- Liquify options ---
+        self._liquify_row = QtWidgets.QWidget()
+        liq_layout = QtWidgets.QHBoxLayout(self._liquify_row)
+        liq_layout.setContentsMargins(0, 0, 0, 0)
+        liq_layout.addWidget(QtWidgets.QLabel("Mode:"))
+        self._liquify_mode_combo = QtWidgets.QComboBox()
+        self._liquify_mode_combo.addItems(["Push", "Expand", "Contract", "Twirl CW", "Twirl CCW"])
+        self._liquify_mode_combo.currentTextChanged.connect(
+            lambda t: setattr(self.canvas, '_liquify_mode', t.lower().replace(" ", "_")))
+        liq_layout.addWidget(self._liquify_mode_combo)
+        liq_layout.addWidget(QtWidgets.QLabel("R:"))
+        self._liquify_radius_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._liquify_radius_slider.setMinimum(5)
+        self._liquify_radius_slider.setMaximum(100)
+        self._liquify_radius_slider.setValue(30)
+        self._liquify_radius_slider.setFixedWidth(60)
+        self._liquify_radius_slider.valueChanged.connect(
+            lambda v: setattr(self.canvas, '_liquify_radius', v))
+        liq_layout.addWidget(self._liquify_radius_slider)
+        liq_layout.addWidget(QtWidgets.QLabel("S:"))
+        self._liquify_strength_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._liquify_strength_slider.setMinimum(1)
+        self._liquify_strength_slider.setMaximum(100)
+        self._liquify_strength_slider.setValue(50)
+        self._liquify_strength_slider.setFixedWidth(60)
+        self._liquify_strength_slider.valueChanged.connect(
+            lambda v: setattr(self.canvas, '_liquify_strength', v / 100.0))
+        liq_layout.addWidget(self._liquify_strength_slider)
+        self._liquify_row.hide()
+        paint_opts_layout.addWidget(self._liquify_row)
+
+        # --- Pen tool options ---
+        self._pen_row = QtWidgets.QWidget()
+        pen_layout = QtWidgets.QHBoxLayout(self._pen_row)
+        pen_layout.setContentsMargins(0, 0, 0, 0)
+        pen_layout.addWidget(QtWidgets.QLabel("Width:"))
+        self._pen_width_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._pen_width_slider.setMinimum(1)
+        self._pen_width_slider.setMaximum(20)
+        self._pen_width_slider.setValue(2)
+        self._pen_width_slider.setFixedWidth(60)
+        self._pen_width_slider.valueChanged.connect(
+            lambda v: setattr(self.canvas, '_pen_stroke_width', float(v)))
+        pen_layout.addWidget(self._pen_width_slider)
+        self._pen_closed_cb = QtWidgets.QCheckBox("Closed")
+        self._pen_closed_cb.setStyleSheet("font-size: 10px; color: #aaa;")
+        self._pen_closed_cb.toggled.connect(
+            lambda v: setattr(self.canvas, '_pen_closed', v))
+        pen_layout.addWidget(self._pen_closed_cb)
+        finish_pen_btn = QtWidgets.QPushButton("Finish Path")
+        finish_pen_btn.setStyleSheet("font-size: 10px; padding: 2px 4px;")
+        finish_pen_btn.clicked.connect(lambda: (self.canvas._finish_pen_path(), self._refresh_layer_list()))
+        pen_layout.addWidget(finish_pen_btn)
+        add_vec_btn = QtWidgets.QPushButton("+ Vec Layer")
+        add_vec_btn.setStyleSheet("font-size: 10px; padding: 2px 4px;")
+        add_vec_btn.clicked.connect(lambda: (self.canvas.add_vector_layer(), self._refresh_layer_list()))
+        pen_layout.addWidget(add_vec_btn)
+        self._pen_row.hide()
+        paint_opts_layout.addWidget(self._pen_row)
+
+        # --- Text options ---
+        self._text_row = QtWidgets.QWidget()
+        text_layout = QtWidgets.QVBoxLayout(self._text_row)
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setSpacing(2)
+        text_input_row = QtWidgets.QHBoxLayout()
+        text_input_row.addWidget(QtWidgets.QLabel("Text:"))
+        self._text_input = QtWidgets.QLineEdit("Text")
+        self._text_input.setStyleSheet("background-color: #1e1e1e; color: #ddd; font-size: 11px; padding: 2px;")
+        self._text_input.textChanged.connect(lambda t: setattr(self.canvas, '_text_content', t))
+        text_input_row.addWidget(self._text_input)
+        text_layout.addLayout(text_input_row)
+        text_font_row = QtWidgets.QHBoxLayout()
+        self._font_combo = QtWidgets.QFontComboBox()
+        self._font_combo.setStyleSheet("font-size: 10px;")
+        self._font_combo.currentFontChanged.connect(lambda f: setattr(self.canvas, '_text_font_family', f.family()))
+        text_font_row.addWidget(self._font_combo)
+        self._font_size_spin = QtWidgets.QSpinBox()
+        self._font_size_spin.setMinimum(8)
+        self._font_size_spin.setMaximum(200)
+        self._font_size_spin.setValue(24)
+        self._font_size_spin.setFixedWidth(55)
+        self._font_size_spin.setStyleSheet("font-size: 10px;")
+        self._font_size_spin.valueChanged.connect(lambda v: setattr(self.canvas, '_text_font_size', v))
+        text_font_row.addWidget(self._font_size_spin)
+        text_layout.addLayout(text_font_row)
+        self._text_row.hide()
+        paint_opts_layout.addWidget(self._text_row)
+
+        # --- Polygon/Star options ---
+        self._polygon_row = QtWidgets.QWidget()
+        poly_layout = QtWidgets.QHBoxLayout(self._polygon_row)
+        poly_layout.setContentsMargins(0, 0, 0, 0)
+        poly_layout.addWidget(QtWidgets.QLabel("Sides:"))
+        self._polygon_sides_spin = QtWidgets.QSpinBox()
+        self._polygon_sides_spin.setMinimum(3)
+        self._polygon_sides_spin.setMaximum(32)
+        self._polygon_sides_spin.setValue(6)
+        self._polygon_sides_spin.setFixedWidth(50)
+        self._polygon_sides_spin.valueChanged.connect(lambda v: setattr(self.canvas, '_polygon_sides', v))
+        poly_layout.addWidget(self._polygon_sides_spin)
+        self._star_toggle = QtWidgets.QCheckBox("Star")
+        self._star_toggle.setStyleSheet("font-size: 10px; color: #aaa;")
+        self._star_toggle.toggled.connect(lambda v: setattr(self.canvas, '_polygon_star', v))
+        poly_layout.addWidget(self._star_toggle)
+        self._inner_ratio_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._inner_ratio_slider.setMinimum(10)
+        self._inner_ratio_slider.setMaximum(90)
+        self._inner_ratio_slider.setValue(50)
+        self._inner_ratio_slider.setFixedWidth(60)
+        self._inner_ratio_slider.valueChanged.connect(lambda v: setattr(self.canvas, '_polygon_inner_ratio', v / 100.0))
+        poly_layout.addWidget(self._inner_ratio_slider)
+        self._polygon_row.hide()
+        paint_opts_layout.addWidget(self._polygon_row)
+
+        # --- Selection mode ---
+        self._select_mode_row = QtWidgets.QWidget()
+        sel_layout = QtWidgets.QHBoxLayout(self._select_mode_row)
+        sel_layout.setContentsMargins(0, 0, 0, 0)
+        sel_layout.addWidget(QtWidgets.QLabel("Mode:"))
+        self._select_mode_combo = QtWidgets.QComboBox()
+        self._select_mode_combo.addItems(["Rect", "Ellipse"])
+        self._select_mode_combo.currentTextChanged.connect(self._on_select_mode_changed)
+        sel_layout.addWidget(self._select_mode_combo)
+        sel_layout.addWidget(QtWidgets.QLabel("Feather:"))
+        self._feather_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._feather_slider.setMinimum(0)
+        self._feather_slider.setMaximum(20)
+        self._feather_slider.setValue(0)
+        self._feather_slider.valueChanged.connect(lambda v: setattr(self.canvas, '_select_feather', v))
+        sel_layout.addWidget(self._feather_slider)
+        self._select_mode_row.hide()
+        paint_opts_layout.addWidget(self._select_mode_row)
+
+        # --- Lasso mode ---
+        self._lasso_mode_row = QtWidgets.QWidget()
+        lasso_layout = QtWidgets.QHBoxLayout(self._lasso_mode_row)
+        lasso_layout.setContentsMargins(0, 0, 0, 0)
+        lasso_layout.addWidget(QtWidgets.QLabel("Mode:"))
+        self._lasso_mode_combo = QtWidgets.QComboBox()
+        self._lasso_mode_combo.addItems(["Freehand", "Polygon"])
+        self._lasso_mode_combo.currentTextChanged.connect(self._on_lasso_mode_changed)
+        lasso_layout.addWidget(self._lasso_mode_combo)
+        lasso_layout.addWidget(QtWidgets.QLabel("Feather:"))
+        self._lasso_feather_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._lasso_feather_slider.setMinimum(0)
+        self._lasso_feather_slider.setMaximum(20)
+        self._lasso_feather_slider.setValue(0)
+        self._lasso_feather_slider.valueChanged.connect(lambda v: setattr(self.canvas, '_select_feather', v))
+        lasso_layout.addWidget(self._lasso_feather_slider)
+        self._lasso_mode_row.hide()
+        paint_opts_layout.addWidget(self._lasso_mode_row)
+
+        # --- Transform mode ---
+        self._transform_row = QtWidgets.QWidget()
+        trans_layout = QtWidgets.QHBoxLayout(self._transform_row)
+        trans_layout.setContentsMargins(0, 0, 0, 0)
+        trans_layout.addWidget(QtWidgets.QLabel("Mode:"))
+        self._transform_combo = QtWidgets.QComboBox()
+        self._transform_combo.addItems(["Move", "Flip H", "Flip V"])
+        self._transform_combo.currentTextChanged.connect(self._on_transform_mode_changed)
+        trans_layout.addWidget(self._transform_combo)
+        self._transform_row.hide()
+        paint_opts_layout.addWidget(self._transform_row)
+
+        # --- Symmetry options ---
+        self._symmetry_row = QtWidgets.QWidget()
+        sym_layout = QtWidgets.QHBoxLayout(self._symmetry_row)
+        sym_layout.setContentsMargins(0, 0, 0, 0)
+        self._symmetry_toggle = QtWidgets.QCheckBox("Symmetry")
+        self._symmetry_toggle.setStyleSheet("font-size: 10px; color: #aaa;")
+        self._symmetry_toggle.toggled.connect(lambda v: setattr(self.canvas, '_symmetry_enabled', v))
+        sym_layout.addWidget(self._symmetry_toggle)
+        self._symmetry_axis_combo = QtWidgets.QComboBox()
+        self._symmetry_axis_combo.addItems(["Vertical", "Horizontal", "Both", "Radial"])
+        self._symmetry_axis_combo.currentTextChanged.connect(lambda t: setattr(self.canvas, '_symmetry_axis', t.lower()))
+        sym_layout.addWidget(self._symmetry_axis_combo)
+        self._symmetry_segments_spin = QtWidgets.QSpinBox()
+        self._symmetry_segments_spin.setMinimum(2)
+        self._symmetry_segments_spin.setMaximum(32)
+        self._symmetry_segments_spin.setValue(6)
+        self._symmetry_segments_spin.setFixedWidth(45)
+        self._symmetry_segments_spin.setToolTip("Radial segments")
+        self._symmetry_segments_spin.valueChanged.connect(lambda v: setattr(self.canvas, '_symmetry_segments', v))
+        sym_layout.addWidget(self._symmetry_segments_spin)
+        self._symmetry_row.hide()
+        paint_opts_layout.addWidget(self._symmetry_row)
+
+        # --- Stabilizer options ---
+        self._stabilizer_row = QtWidgets.QWidget()
+        stab_layout = QtWidgets.QHBoxLayout(self._stabilizer_row)
+        stab_layout.setContentsMargins(0, 0, 0, 0)
+        self._stabilizer_toggle = QtWidgets.QCheckBox("Stabilizer")
+        self._stabilizer_toggle.setStyleSheet("font-size: 10px; color: #aaa;")
+        self._stabilizer_toggle.toggled.connect(lambda v: setattr(self.canvas, '_stabilizer_enabled', v))
+        stab_layout.addWidget(self._stabilizer_toggle)
+        self._stabilizer_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._stabilizer_slider.setMinimum(2)
+        self._stabilizer_slider.setMaximum(20)
+        self._stabilizer_slider.setValue(5)
+        self._stabilizer_slider.setFixedWidth(60)
+        self._stabilizer_slider.valueChanged.connect(lambda v: setattr(self.canvas, '_stabilizer_strength', v))
+        stab_layout.addWidget(self._stabilizer_slider)
+        self._stabilizer_row.hide()
+        paint_opts_layout.addWidget(self._stabilizer_row)
+
+        # --- Color dynamics ---
+        self._color_dynamics_row = QtWidgets.QWidget()
+        cd_layout = QtWidgets.QHBoxLayout(self._color_dynamics_row)
+        cd_layout.setContentsMargins(0, 0, 0, 0)
+        cd_layout.addWidget(QtWidgets.QLabel("H:"))
+        self._hue_jitter_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._hue_jitter_slider.setMinimum(0)
+        self._hue_jitter_slider.setMaximum(50)
+        self._hue_jitter_slider.setValue(0)
+        self._hue_jitter_slider.setFixedWidth(40)
+        self._hue_jitter_slider.valueChanged.connect(lambda v: setattr(self.canvas, '_hue_jitter', v / 100.0))
+        cd_layout.addWidget(self._hue_jitter_slider)
+        cd_layout.addWidget(QtWidgets.QLabel("S:"))
+        self._sat_jitter_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._sat_jitter_slider.setMinimum(0)
+        self._sat_jitter_slider.setMaximum(50)
+        self._sat_jitter_slider.setValue(0)
+        self._sat_jitter_slider.setFixedWidth(40)
+        self._sat_jitter_slider.valueChanged.connect(lambda v: setattr(self.canvas, '_sat_jitter', v / 100.0))
+        cd_layout.addWidget(self._sat_jitter_slider)
+        cd_layout.addWidget(QtWidgets.QLabel("V:"))
+        self._val_jitter_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._val_jitter_slider.setMinimum(0)
+        self._val_jitter_slider.setMaximum(50)
+        self._val_jitter_slider.setValue(0)
+        self._val_jitter_slider.setFixedWidth(40)
+        self._val_jitter_slider.valueChanged.connect(lambda v: setattr(self.canvas, '_val_jitter', v / 100.0))
+        cd_layout.addWidget(self._val_jitter_slider)
+        self._color_dynamics_row.hide()
+        paint_opts_layout.addWidget(self._color_dynamics_row)
+
+        # --- Perspective / Isometric guides ---
+        guide_sep = QtWidgets.QFrame()
+        guide_sep.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+        guide_sep.setStyleSheet("background-color: #444;")
+        paint_opts_layout.addWidget(guide_sep)
+        guide_row = QtWidgets.QHBoxLayout()
+        guide_row.addWidget(QtWidgets.QLabel("Guides:"))
+        self._guide_combo = QtWidgets.QComboBox()
+        self._guide_combo.addItems(["None", "Grid", "1-Point", "2-Point", "3-Point", "Isometric"])
+        guide_type_map = {"None": "none", "Grid": "grid", "1-Point": "1pt",
+                          "2-Point": "2pt", "3-Point": "3pt", "Isometric": "isometric"}
+        self._guide_combo.currentTextChanged.connect(
+            lambda t: (setattr(self.canvas, '_guide_type', guide_type_map.get(t, "none")),
+                        self.canvas.update()))
+        guide_row.addWidget(self._guide_combo)
+        paint_opts_layout.addLayout(guide_row)
+
+        # --- Custom brush (load from image) ---
+        custom_brush_row = QtWidgets.QHBoxLayout()
+        load_brush_btn = QtWidgets.QPushButton("Load Brush Tip")
+        load_brush_btn.setStyleSheet("font-size: 10px; padding: 2px 4px;")
+        load_brush_btn.clicked.connect(self._load_custom_brush)
+        custom_brush_row.addWidget(load_brush_btn)
+        self._custom_brush_label = QtWidgets.QLabel("Default")
+        self._custom_brush_label.setStyleSheet("color: #aaa; font-size: 10px;")
+        custom_brush_row.addWidget(self._custom_brush_label)
+        paint_opts_layout.addLayout(custom_brush_row)
+
+        # Tool option visibility registry
+        self._tool_option_map = {
+            "none": [],
+            "pencil": ["hardness", "tip", "spacing", "scatter", "symmetry", "stabilizer", "color_dynamics"],
+            "eraser": ["hardness", "tip"],
+            "eyedropper": [],
+            "line": [],
+            "rect": ["fill_mode"],
+            "ellipse": ["fill_mode"],
+            "fill": ["tolerance"],
+            "wand": ["tolerance"],
+            "bg_erase": ["tolerance"],
+            "text": ["text"],
+            "smudge": ["hardness"],
+            "clone": ["hardness", "clone"],
+            "blur_brush": ["blur"],
+            "dodge_burn": ["dodge_burn"],
+            "polygon": ["fill_mode", "polygon"],
+            "gradient": ["gradient"],
+            "select_rect": ["select_mode"],
+            "lasso": ["lasso_mode"],
+            "transform": ["transform"],
+            "crop": [],
+            "liquify": ["liquify"],
+            "pen": ["pen"],
+        }
+        self._option_row_widgets = {
+            "tolerance": self._tolerance_row,
+            "fill_mode": self._fill_mode_row,
+            "hardness": self._hardness_row,
+            "tip": self._tip_row,
+            "spacing": self._spacing_row,
+            "scatter": self._scatter_row,
+            "gradient": self._gradient_row,
+            "clone": self._clone_row,
+            "blur": self._blur_row,
+            "dodge_burn": self._dodge_burn_row,
+            "text": self._text_row,
+            "polygon": self._polygon_row,
+            "select_mode": self._select_mode_row,
+            "lasso_mode": self._lasso_mode_row,
+            "transform": self._transform_row,
+            "symmetry": self._symmetry_row,
+            "stabilizer": self._stabilizer_row,
+            "color_dynamics": self._color_dynamics_row,
+            "liquify": self._liquify_row,
+            "pen": self._pen_row,
+        }
+
+        # paint_sep and _paint_options_widget moved to Markup tab
+
+        self.inspector_tabs.addTab(insp_tab_scroll, "Shaders")
+
+        # ========== TEXTURES TAB ==========
+        textures_tab = QtWidgets.QWidget()
+        tex_scroll = QtWidgets.QScrollArea()
+        tex_scroll.setWidgetResizable(True)
+        tex_scroll.setStyleSheet("QScrollArea { border: none; background: #252525; }")
+        tex_scroll.setWidget(textures_tab)
+        tex_layout = QtWidgets.QVBoxLayout(textures_tab)
+        tex_layout.setContentsMargins(8, 8, 8, 8)
+        tex_layout.setSpacing(4)
+
+        # -- Procedural Textures Section --
+        tex_proc_lbl = QtWidgets.QLabel("Procedural Textures")
+        tex_proc_lbl.setStyleSheet("font-weight: bold; font-size: 12px; color: #ddd; margin-bottom: 2px;")
+        tex_layout.addWidget(tex_proc_lbl)
+
+        # Material selector
+        mat_row = QtWidgets.QHBoxLayout()
+        mat_row.setSpacing(4)
+        mat_lbl = QtWidgets.QLabel("Material:")
+        mat_lbl.setStyleSheet("font-size: 11px; color: #ccc;")
+        mat_lbl.setFixedWidth(62)
+        self._tex_material_combo = QtWidgets.QComboBox()
+        self._tex_material_combo.setStyleSheet("font-size: 11px; background: #333; color: #ddd; padding: 2px;")
+        self._tex_material_combo.addItem("0: Default Material")
+        mat_row.addWidget(mat_lbl)
+        mat_row.addWidget(self._tex_material_combo, 1)
+        tex_layout.addLayout(mat_row)
+
+        # Texture type selector
+        type_row = QtWidgets.QHBoxLayout()
+        type_row.setSpacing(4)
+        type_lbl = QtWidgets.QLabel("Type:")
+        type_lbl.setStyleSheet("font-size: 11px; color: #ccc;")
+        type_lbl.setFixedWidth(62)
+        self._tex_type_combo = QtWidgets.QComboBox()
+        self._tex_type_combo.setStyleSheet("font-size: 11px; background: #333; color: #ddd; padding: 2px;")
+        for name in PROCEDURAL_TEXTURES:
+            self._tex_type_combo.addItem(name)
+        self._tex_type_combo.currentIndexChanged.connect(self._on_tex_type_changed)
+        type_row.addWidget(type_lbl)
+        type_row.addWidget(self._tex_type_combo, 1)
+        tex_layout.addLayout(type_row)
+
+        # Resolution selector
+        res_row = QtWidgets.QHBoxLayout()
+        res_row.setSpacing(4)
+        res_lbl = QtWidgets.QLabel("Resolution:")
+        res_lbl.setStyleSheet("font-size: 11px; color: #ccc;")
+        res_lbl.setFixedWidth(62)
+        self._tex_resolution_combo = QtWidgets.QComboBox()
+        self._tex_resolution_combo.setStyleSheet("font-size: 11px; background: #333; color: #ddd; padding: 2px;")
+        for r in ["256", "512", "1024", "2048"]:
+            self._tex_resolution_combo.addItem(r)
+        self._tex_resolution_combo.setCurrentIndex(1)  # Default 512
+        res_row.addWidget(res_lbl)
+        res_row.addWidget(self._tex_resolution_combo, 1)
+        tex_layout.addLayout(res_row)
+
+        # Description label
+        self._tex_description = QtWidgets.QLabel("")
+        self._tex_description.setStyleSheet("font-size: 10px; color: #999; font-style: italic; margin: 2px 0;")
+        self._tex_description.setWordWrap(True)
+        tex_layout.addWidget(self._tex_description)
+
+        # Parameters container
+        self._tex_params_widget = QtWidgets.QWidget()
+        self._tex_params_layout = QtWidgets.QVBoxLayout(self._tex_params_widget)
+        self._tex_params_layout.setContentsMargins(0, 0, 0, 0)
+        self._tex_params_layout.setSpacing(2)
+        tex_layout.addWidget(self._tex_params_widget)
+        self._tex_param_sliders = {}
+
+        # Preview
+        self._tex_preview_label = QtWidgets.QLabel()
+        self._tex_preview_label.setFixedSize(128, 128)
+        self._tex_preview_label.setStyleSheet("background: #1a1a1a; border: 1px solid #444;")
+        self._tex_preview_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        preview_container = QtWidgets.QHBoxLayout()
+        preview_container.addStretch()
+        preview_container.addWidget(self._tex_preview_label)
+        preview_container.addStretch()
+        tex_layout.addLayout(preview_container)
+
+        # Apply to Material button
+        self._tex_apply_btn = QtWidgets.QPushButton("Apply to Material")
+        self._tex_apply_btn.setStyleSheet(compact_btn + "background: #2d5a5a; color: #ddd;")
+        self._tex_apply_btn.clicked.connect(self._on_tex_apply)
+        tex_layout.addWidget(self._tex_apply_btn)
+
+        # -- Separator --
+        tex_sep1 = QtWidgets.QFrame()
+        tex_sep1.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+        tex_sep1.setStyleSheet("color: #444; margin: 6px 0;")
+        tex_layout.addWidget(tex_sep1)
+
+        # -- Custom Texture Section --
+        tex_custom_lbl = QtWidgets.QLabel("Custom Texture")
+        tex_custom_lbl.setStyleSheet("font-weight: bold; font-size: 12px; color: #ddd; margin-bottom: 2px;")
+        tex_layout.addWidget(tex_custom_lbl)
+
+        tex_custom_row = QtWidgets.QHBoxLayout()
+        tex_custom_row.setSpacing(4)
+        self._tex_browse_btn = QtWidgets.QPushButton("Browse...")
+        self._tex_browse_btn.setStyleSheet(compact_btn + "background: #3a3a3a; color: #ddd;")
+        self._tex_browse_btn.clicked.connect(self._on_tex_browse)
+        self._tex_apply_custom_btn = QtWidgets.QPushButton("Apply Image")
+        self._tex_apply_custom_btn.setStyleSheet(compact_btn + "background: #2d5a5a; color: #ddd;")
+        self._tex_apply_custom_btn.clicked.connect(self._on_tex_apply_custom)
+        tex_custom_row.addWidget(self._tex_browse_btn)
+        tex_custom_row.addWidget(self._tex_apply_custom_btn)
+        tex_layout.addLayout(tex_custom_row)
+
+        self._tex_custom_path_label = QtWidgets.QLabel("No image selected")
+        self._tex_custom_path_label.setStyleSheet("font-size: 10px; color: #888;")
+        self._tex_custom_path_label.setWordWrap(True)
+        tex_layout.addWidget(self._tex_custom_path_label)
+
+        # -- Separator --
+        tex_sep2 = QtWidgets.QFrame()
+        tex_sep2.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+        tex_sep2.setStyleSheet("color: #444; margin: 6px 0;")
+        tex_layout.addWidget(tex_sep2)
+
+        # -- Transform Section --
+        tex_transform_lbl = QtWidgets.QLabel("Transform")
+        tex_transform_lbl.setStyleSheet("font-weight: bold; font-size: 12px; color: #ddd; margin-bottom: 2px;")
+        tex_layout.addWidget(tex_transform_lbl)
+
+        slider_style = "font-size: 10px; color: #ccc;"
+        self._tex_tiling_u = self._make_tex_slider("Tiling U", 1.0, 10.0, 1.0, 0.1, tex_layout)
+        self._tex_tiling_v = self._make_tex_slider("Tiling V", 1.0, 10.0, 1.0, 0.1, tex_layout)
+        self._tex_offset_u = self._make_tex_slider("Offset U", 0.0, 1.0, 0.0, 0.01, tex_layout)
+        self._tex_offset_v = self._make_tex_slider("Offset V", 0.0, 1.0, 0.0, 0.01, tex_layout)
+
+        # -- Separator --
+        tex_sep3 = QtWidgets.QFrame()
+        tex_sep3.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+        tex_sep3.setStyleSheet("color: #444; margin: 6px 0;")
+        tex_layout.addWidget(tex_sep3)
+
+        # -- Reset --
+        self._tex_reset_btn = QtWidgets.QPushButton("Reset to Original")
+        self._tex_reset_btn.setStyleSheet(tiny_btn + "background: #5a2d2d; color: #ddd;")
+        self._tex_reset_btn.clicked.connect(self._on_tex_reset)
+        tex_layout.addWidget(self._tex_reset_btn)
+
+        tex_layout.addStretch()
+
+        self.inspector_tabs.addTab(tex_scroll, "Textures")
+        self._tex_custom_image_data = None  # numpy RGBA for loaded custom image
+
+        # Debounce timer for live preview updates
+        self._tex_preview_timer = QtCore.QTimer()
+        self._tex_preview_timer.setSingleShot(True)
+        self._tex_preview_timer.setInterval(80)  # 80ms debounce
+        self._tex_preview_timer.timeout.connect(self._on_tex_generate_preview)
+
+        # Initialize param sliders for default texture type
+        self._on_tex_type_changed(0)
+
+        # ========== LAYERS TAB (with History in bottom half) ==========
+        layers_tab = QtWidgets.QWidget()
+        layers_tab_outer = QtWidgets.QVBoxLayout(layers_tab)
+        layers_tab_outer.setContentsMargins(0, 0, 0, 0)
+        layers_tab_outer.setSpacing(0)
+
+        layers_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        layers_splitter.setHandleWidth(3)
+        layers_tab_outer.addWidget(layers_splitter)
+
+        # --- Top half: Layers ---
+        layers_top = QtWidgets.QWidget()
+        layers_tab_layout = QtWidgets.QVBoxLayout(layers_top)
+        layers_tab_layout.setContentsMargins(5, 5, 5, 2)
+        layers_tab_layout.setSpacing(4)
+
+        # Layer list
+        self.layer_list_widget = QtWidgets.QListWidget()
+        self.layer_list_widget.setStyleSheet("""
+            QListWidget { background-color: #1e1e1e; border: 1px solid #444; font-size: 11px; }
+            QListWidget::item { padding: 3px; border-bottom: 1px solid #333; }
+            QListWidget::item:selected { background-color: #3a4a5a; }
+        """)
+        self.layer_list_widget.currentRowChanged.connect(self._on_layer_selected)
+        layers_tab_layout.addWidget(self.layer_list_widget, 1)
+
+        # Layer buttons
+        layer_btn_row = QtWidgets.QHBoxLayout()
+        layer_btn_row.setSpacing(3)
+        add_layer_btn = QtWidgets.QPushButton("+ Add")
+        add_layer_btn.clicked.connect(self._add_layer)
+        add_layer_btn.setStyleSheet(f"background-color: #2d5a2d; {tiny_btn}")
+        add_layer_btn.setToolTip("Add current shader as a new layer")
+        layer_btn_row.addWidget(add_layer_btn)
+        del_layer_btn = QtWidgets.QPushButton("- Remove")
+        del_layer_btn.clicked.connect(self._remove_layer)
+        del_layer_btn.setStyleSheet(f"background-color: #5a2d2d; {tiny_btn}")
+        layer_btn_row.addWidget(del_layer_btn)
+        up_layer_btn = QtWidgets.QPushButton("↑")
+        up_layer_btn.clicked.connect(self._move_layer_up)
+        up_layer_btn.setStyleSheet(tiny_btn)
+        up_layer_btn.setFixedWidth(28)
+        layer_btn_row.addWidget(up_layer_btn)
+        down_layer_btn = QtWidgets.QPushButton("↓")
+        down_layer_btn.clicked.connect(self._move_layer_down)
+        down_layer_btn.setStyleSheet(tiny_btn)
+        down_layer_btn.setFixedWidth(28)
+        layer_btn_row.addWidget(down_layer_btn)
+        # Group button
+        group_btn = QtWidgets.QPushButton("📁")
+        group_btn.clicked.connect(self._create_layer_group)
+        group_btn.setStyleSheet(tiny_btn)
+        group_btn.setFixedWidth(28)
+        group_btn.setToolTip("Create layer group")
+        layer_btn_row.addWidget(group_btn)
+        layers_tab_layout.addLayout(layer_btn_row)
+
+        # Blend mode + opacity for selected layer
+        blend_sep = QtWidgets.QFrame()
+        blend_sep.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+        blend_sep.setStyleSheet("background-color: #444;")
+        layers_tab_layout.addWidget(blend_sep)
+
+        blend_row = QtWidgets.QHBoxLayout()
+        blend_row.addWidget(QtWidgets.QLabel("Blend:"))
+        self._layer_blend_combo = QtWidgets.QComboBox()
+        self._layer_blend_combo.addItems([m.title() for m in BLEND_MODES])
+        self._layer_blend_combo.currentTextChanged.connect(self._on_layer_blend_changed)
+        blend_row.addWidget(self._layer_blend_combo)
+        layers_tab_layout.addLayout(blend_row)
+
+        opacity_lrow = QtWidgets.QHBoxLayout()
+        opacity_lrow.addWidget(QtWidgets.QLabel("Opacity:"))
+        self._layer_opacity_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._layer_opacity_slider.setMinimum(0)
+        self._layer_opacity_slider.setMaximum(100)
+        self._layer_opacity_slider.setValue(100)
+        self._layer_opacity_slider.valueChanged.connect(self._on_layer_opacity_changed)
+        opacity_lrow.addWidget(self._layer_opacity_slider)
+        self._layer_opacity_label = QtWidgets.QLabel("100%")
+        self._layer_opacity_label.setFixedWidth(40)
+        self._layer_opacity_label.setStyleSheet("color: #aaa; font-size: 10px;")
+        opacity_lrow.addWidget(self._layer_opacity_label)
+        layers_tab_layout.addLayout(opacity_lrow)
+
+        # --- Clipping mask toggle ---
+        clip_row = QtWidgets.QHBoxLayout()
+        self._layer_clipping_cb = QtWidgets.QCheckBox("Clipping Mask")
+        self._layer_clipping_cb.setStyleSheet("font-size: 10px; color: #aaa;")
+        self._layer_clipping_cb.toggled.connect(self._on_layer_clipping_changed)
+        clip_row.addWidget(self._layer_clipping_cb)
+        layers_tab_layout.addLayout(clip_row)
+
+        # --- Layer mask controls ---
+        mask_row = QtWidgets.QHBoxLayout()
+        add_mask_btn = QtWidgets.QPushButton("+ Mask")
+        add_mask_btn.setStyleSheet(tiny_btn)
+        add_mask_btn.clicked.connect(self._on_add_layer_mask)
+        mask_row.addWidget(add_mask_btn)
+        del_mask_btn = QtWidgets.QPushButton("- Mask")
+        del_mask_btn.setStyleSheet(tiny_btn)
+        del_mask_btn.clicked.connect(self._on_delete_layer_mask)
+        mask_row.addWidget(del_mask_btn)
+        inv_mask_btn = QtWidgets.QPushButton("Invert")
+        inv_mask_btn.setStyleSheet(tiny_btn)
+        inv_mask_btn.clicked.connect(self._on_invert_layer_mask)
+        mask_row.addWidget(inv_mask_btn)
+        self._paint_mask_cb = QtWidgets.QCheckBox("Paint Mask")
+        self._paint_mask_cb.setStyleSheet("font-size: 10px; color: #aaa;")
+        self._paint_mask_cb.toggled.connect(self._on_paint_mask_toggled)
+        mask_row.addWidget(self._paint_mask_cb)
+        layers_tab_layout.addLayout(mask_row)
+
+        layers_splitter.addWidget(layers_top)
+
+        # --- Bottom half: History ---
+        history_bottom = QtWidgets.QWidget()
+        history_layout = QtWidgets.QVBoxLayout(history_bottom)
+        history_layout.setContentsMargins(5, 2, 5, 5)
+        history_layout.setSpacing(4)
+
+        hist_label = QtWidgets.QLabel("Snapshots")
+        hist_label.setStyleSheet("font-weight: bold; font-size: 11px; color: #fff;")
+        history_layout.addWidget(hist_label)
+
+        self._history_list = QtWidgets.QListWidget()
+        self._history_list.setStyleSheet("""
+            QListWidget { background-color: #1e1e1e; color: #ddd; font-size: 10px;
+                          border: 1px solid #444; }
+            QListWidget::item:selected { background-color: #3a3a5a; }
+        """)
+        self._history_list.itemDoubleClicked.connect(
+            lambda item: self._restore_snapshot(self._history_list.row(item)))
+        history_layout.addWidget(self._history_list, 1)
+
+        hist_btn_row = QtWidgets.QHBoxLayout()
+        take_snap_btn = QtWidgets.QPushButton("Take Snapshot")
+        take_snap_btn.setStyleSheet(tiny_btn)
+        take_snap_btn.clicked.connect(lambda: self._take_snapshot())
+        hist_btn_row.addWidget(take_snap_btn)
+        restore_snap_btn = QtWidgets.QPushButton("Restore")
+        restore_snap_btn.setStyleSheet(tiny_btn)
+        restore_snap_btn.clicked.connect(
+            lambda: self._restore_snapshot(self._history_list.currentRow()))
+        hist_btn_row.addWidget(restore_snap_btn)
+        del_snap_btn = QtWidgets.QPushButton("Delete")
+        del_snap_btn.setStyleSheet(tiny_btn)
+        del_snap_btn.clicked.connect(self._delete_snapshot)
+        hist_btn_row.addWidget(del_snap_btn)
+        history_layout.addLayout(hist_btn_row)
+
+        # Named snapshot input
+        name_row = QtWidgets.QHBoxLayout()
+        name_row.addWidget(QtWidgets.QLabel("Name:"))
+        self._snapshot_name_input = QtWidgets.QLineEdit()
+        self._snapshot_name_input.setPlaceholderText("Snapshot name...")
+        self._snapshot_name_input.setStyleSheet(
+            "background-color: #1e1e1e; color: #ddd; font-size: 10px; padding: 2px;")
+        name_row.addWidget(self._snapshot_name_input)
+        take_named_btn = QtWidgets.QPushButton("Save")
+        take_named_btn.setStyleSheet(tiny_btn)
+        take_named_btn.clicked.connect(
+            lambda: self._take_snapshot(self._snapshot_name_input.text() or None))
+        name_row.addWidget(take_named_btn)
+        history_layout.addLayout(name_row)
+
+        layers_splitter.addWidget(history_bottom)
+        layers_splitter.setSizes([300, 200])
+
+        self.inspector_tabs.addTab(layers_tab, "Layers")
+
+        # ========== MARKUP TAB ==========
+        markup_tab = QtWidgets.QWidget()
+        markup_tab_layout = QtWidgets.QVBoxLayout(markup_tab)
+        markup_tab_layout.setContentsMargins(4, 4, 4, 4)
+        markup_tab_layout.setSpacing(0)
+
+        # Top half: tool buttons (flow layout, wraps on overflow)
+        self.paint_toolbar.show()
+        markup_tab_layout.addWidget(self.paint_toolbar)
+
+        # Separator between tools and parameters
+        markup_tab_layout.addWidget(paint_sep)
+
+        # Bottom half: tool parameters (scrollable)
+        markup_scroll = QtWidgets.QScrollArea()
+        markup_scroll.setWidgetResizable(True)
+        markup_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        markup_scroll.setStyleSheet("QScrollArea { border: none; background-color: transparent; }")
+        self._paint_options_widget.show()
+        markup_scroll.setWidget(self._paint_options_widget)
+        markup_tab_layout.addWidget(markup_scroll, 1)
+
+        self.inspector_tabs.addTab(markup_tab, "Markup")
+
+        # ========== AI TAB ==========
+        ai_tab = QtWidgets.QWidget()
+        ai_tab_layout = QtWidgets.QVBoxLayout(ai_tab)
+        ai_tab_layout.setContentsMargins(4, 4, 4, 4)
+        ai_tab_layout.setSpacing(0)
+
+        ai_splitter = QSplitter(QtCore.Qt.Orientation.Vertical)
+        ai_splitter.setStyleSheet("QSplitter::handle { background-color: #3a3a3a; height: 3px; }")
+
+        # --- Top 2/3: GLSL Code Editor ---
+        ai_editor_widget = QtWidgets.QWidget()
+        ai_editor_layout = QtWidgets.QVBoxLayout(ai_editor_widget)
+        ai_editor_layout.setContentsMargins(0, 0, 0, 4)
+        ai_editor_layout.setSpacing(4)
+
+        editor_header = QtWidgets.QHBoxLayout()
+        editor_title = QtWidgets.QLabel("GLSL Editor")
+        editor_title.setStyleSheet("font-weight: bold; font-size: 11px; color: #fff;")
+        editor_header.addWidget(editor_title)
+        self.ai_shader_name_edit = QtWidgets.QLineEdit()
+        self.ai_shader_name_edit.setPlaceholderText("Shader name...")
+        self.ai_shader_name_edit.setStyleSheet(
+            "background-color: #2a2a2a; border: 1px solid #444; border-radius: 3px; "
+            "padding: 2px 6px; color: #ddd; font-size: 10px;"
+        )
+        editor_header.addWidget(self.ai_shader_name_edit)
+        ai_editor_layout.addLayout(editor_header)
+
+        self.ai_code_editor = QtWidgets.QPlainTextEdit()
+        self.ai_code_editor.setFont(QtGui.QFont("Consolas", 10))
+        self.ai_code_editor.setStyleSheet("""
+            QPlainTextEdit {
+                background-color: #1e1e1e; color: #ddd; border: 1px solid #444;
+                font-family: Consolas, monospace; selection-background-color: #3a4a5a;
+            }
+        """)
+        self.ai_code_editor.setPlaceholderText(
+            "GLSL shader code will appear here...\n\n"
+            "Ask the AI to generate a shader, or write your own.\n"
+            "Then click 'Add to Shaders' or 'Apply' below."
+        )
+        self.ai_code_editor.setTabStopDistance(
+            QtGui.QFontMetricsF(self.ai_code_editor.font()).horizontalAdvance(' ') * 4
+        )
+        ai_editor_layout.addWidget(self.ai_code_editor, 1)
+
+        editor_btn_row = QtWidgets.QHBoxLayout()
+        editor_btn_row.setSpacing(4)
+        self.ai_add_shader_btn = QtWidgets.QPushButton("Add to Shaders")
+        self.ai_add_shader_btn.setStyleSheet(
+            "background-color: #3d5a3d; color: #ddd; font-size: 11px; "
+            "padding: 4px 10px; font-weight: bold;"
+        )
+        self.ai_add_shader_btn.setToolTip("Add this shader to the Shader dropdown permanently")
+        self.ai_add_shader_btn.clicked.connect(self._ai_add_shader_to_list)
+        editor_btn_row.addWidget(self.ai_add_shader_btn)
+
+        self.ai_apply_shader_btn = QtWidgets.QPushButton("Apply")
+        self.ai_apply_shader_btn.setStyleSheet(
+            "background-color: #4a6fa5; color: #ddd; font-size: 11px; "
+            "padding: 4px 10px; font-weight: bold;"
+        )
+        self.ai_apply_shader_btn.setToolTip("Preview this shader on the current image")
+        self.ai_apply_shader_btn.clicked.connect(self._ai_apply_shader)
+        editor_btn_row.addWidget(self.ai_apply_shader_btn)
+
+        self.ai_validate_btn = QtWidgets.QPushButton("Validate")
+        self.ai_validate_btn.setStyleSheet("font-size: 10px; padding: 3px 8px;")
+        self.ai_validate_btn.clicked.connect(self._ai_validate_shader)
+        editor_btn_row.addWidget(self.ai_validate_btn)
+
+        self.ai_clear_editor_btn = QtWidgets.QPushButton("Clear")
+        self.ai_clear_editor_btn.setStyleSheet("font-size: 10px; padding: 3px 8px;")
+        self.ai_clear_editor_btn.clicked.connect(self._ai_clear_editor)
+        editor_btn_row.addWidget(self.ai_clear_editor_btn)
+
+        ai_editor_layout.addLayout(editor_btn_row)
+        ai_splitter.addWidget(ai_editor_widget)
+
+        # --- Bottom 1/3: Chat Window ---
+        ai_chat_widget = QtWidgets.QWidget()
+        ai_chat_layout = QtWidgets.QVBoxLayout(ai_chat_widget)
+        ai_chat_layout.setContentsMargins(0, 4, 0, 0)
+        ai_chat_layout.setSpacing(4)
+
+        self.ai_chat_display = QtWidgets.QTextEdit()
+        self.ai_chat_display.setReadOnly(True)
+        self.ai_chat_display.setStyleSheet("""
+            QTextEdit {
+                background-color: #1e1e1e; color: #ddd; border: 1px solid #444;
+                font-size: 11px; padding: 4px;
+            }
+        """)
+        self.ai_chat_display.setHtml(
+            '<div style="color: #666; font-style: italic; padding: 8px;">'
+            'Select an AI model below and describe what you want.<br>'
+            'Ask for a shader effect, image generation, or shader code.</div>'
+        )
+        ai_chat_layout.addWidget(self.ai_chat_display, 1)
+
+        # -- Model selector row (above input) --
+        ai_model_row = QtWidgets.QHBoxLayout()
+        ai_model_row.setSpacing(4)
+
+        self.ai_model_combo = QtWidgets.QComboBox()
+        self.ai_model_combo.addItem("Select AI Model")
+        self.ai_model_combo.addItems(sorted(AI_MODELS.keys()))
+        self.ai_model_combo.setStyleSheet("font-size: 10px;")
+        ai_model_row.addWidget(self.ai_model_combo, 1)
+
+        self._ai_manage_btn = QtWidgets.QPushButton("\u2699")
+        self._ai_manage_btn.setFixedWidth(28)
+        self._ai_manage_btn.setToolTip("Manage AI Models")
+        self._ai_manage_btn.setStyleSheet("font-size: 14px; padding: 2px;")
+        self._ai_manage_btn.clicked.connect(self._open_ai_model_dialog)
+        ai_model_row.addWidget(self._ai_manage_btn)
+
+        ai_chat_layout.addLayout(ai_model_row)
+
+        # -- Chat input row (4-line text area + Send) --
+        ai_input_row = QtWidgets.QHBoxLayout()
+        ai_input_row.setSpacing(4)
+
+        self.ai_chat_input = QtWidgets.QPlainTextEdit()
+        self.ai_chat_input.setPlaceholderText("Describe a shader or image... (Shift+Enter for new line)")
+        self.ai_chat_input.setStyleSheet(
+            "background-color: #2a2a2a; border: 1px solid #444; border-radius: 3px; "
+            "padding: 4px 8px; color: #ddd; font-size: 11px;"
+        )
+        self.ai_chat_input.setFixedHeight(68)
+        self.ai_chat_input.installEventFilter(self)
+        ai_input_row.addWidget(self.ai_chat_input, 1)
+
+        self.ai_send_btn = QtWidgets.QPushButton("Send")
+        self.ai_send_btn.setStyleSheet(
+            "background-color: #4a6fa5; color: #ddd; font-size: 11px; "
+            "padding: 4px 12px; font-weight: bold;"
+        )
+        self.ai_send_btn.clicked.connect(self._ai_chat_send)
+        ai_input_row.addWidget(self.ai_send_btn)
+
+        ai_chat_layout.addLayout(ai_input_row)
+        ai_splitter.addWidget(ai_chat_widget)
+
+        ai_splitter.setSizes([300, 400])
+        ai_tab_layout.addWidget(ai_splitter, 1)
+
+        self.inspector_tabs.addTab(ai_tab, "AI")
+
+        # ========== CAMERAS & LIGHTING TAB ==========
+        cam_light_tab = QtWidgets.QWidget()
+        cam_light_outer = QtWidgets.QVBoxLayout(cam_light_tab)
+        cam_light_outer.setContentsMargins(0, 0, 0, 0)
+        cam_light_outer.setSpacing(0)
+
+        cam_light_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        cam_light_splitter.setHandleWidth(3)
+        cam_light_outer.addWidget(cam_light_splitter)
+
+        # --- Top half: Camera controls ---
+        cam_top = QtWidgets.QWidget()
+        cam_scroll = QtWidgets.QScrollArea()
+        cam_scroll.setWidget(cam_top)
+        cam_scroll.setWidgetResizable(True)
+        cam_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        cam_layout = QtWidgets.QVBoxLayout(cam_top)
+        cam_layout.setContentsMargins(5, 5, 5, 2)
+        cam_layout.setSpacing(4)
+
+        cam_header = QtWidgets.QLabel("Camera")
+        cam_header.setStyleSheet("font-weight: bold; font-size: 12px; color: #fff;")
+        cam_layout.addWidget(cam_header)
+
+        # --- Camera Slot (multiple cameras) ---
+        cam_slot_row = QtWidgets.QHBoxLayout()
+        cam_slot_row.addWidget(QtWidgets.QLabel("Camera:"))
+        self._camera_slot_combo = QtWidgets.QComboBox()
+        self._camera_slot_combo.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
+                                               QtWidgets.QSizePolicy.Policy.Fixed)
+        self._camera_slot_combo.currentTextChanged.connect(self._on_camera_slot_changed)
+        cam_slot_row.addWidget(self._camera_slot_combo)
+        cam_slot_add = QtWidgets.QPushButton("+")
+        cam_slot_add.setFixedWidth(24)
+        cam_slot_add.setStyleSheet(tiny_btn)
+        cam_slot_add.setToolTip("Add new camera")
+        cam_slot_add.clicked.connect(self._add_camera_slot)
+        cam_slot_row.addWidget(cam_slot_add)
+        cam_slot_rename = QtWidgets.QPushButton("\u270E")
+        cam_slot_rename.setFixedWidth(24)
+        cam_slot_rename.setStyleSheet(tiny_btn)
+        cam_slot_rename.setToolTip("Rename camera")
+        cam_slot_rename.clicked.connect(self._rename_camera_slot)
+        cam_slot_row.addWidget(cam_slot_rename)
+        cam_slot_del = QtWidgets.QPushButton("\u2716")
+        cam_slot_del.setFixedWidth(24)
+        cam_slot_del.setStyleSheet(f"color: #f88; {tiny_btn}")
+        cam_slot_del.setToolTip("Delete camera")
+        cam_slot_del.clicked.connect(self._delete_camera_slot)
+        cam_slot_row.addWidget(cam_slot_del)
+        cam_layout.addLayout(cam_slot_row)
+
+        # --- Camera Preset ---
+        cam_preset_row = QtWidgets.QHBoxLayout()
+        cam_preset_row.addWidget(QtWidgets.QLabel("Preset:"))
+        self._camera_preset_combo = QtWidgets.QComboBox()
+        self._camera_preset_combo.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
+                                                 QtWidgets.QSizePolicy.Policy.Fixed)
+        self._camera_preset_combo.currentTextChanged.connect(self._apply_camera_preset)
+        cam_preset_row.addWidget(self._camera_preset_combo)
+        cam_preset_save = QtWidgets.QPushButton("Save")
+        cam_preset_save.setStyleSheet(f"background-color: #5a5a2d; {tiny_btn}")
+        cam_preset_save.clicked.connect(self._save_camera_preset)
+        cam_preset_row.addWidget(cam_preset_save)
+        cam_preset_del = QtWidgets.QPushButton("Del")
+        cam_preset_del.setStyleSheet(f"background-color: #5a2d2d; {tiny_btn}")
+        cam_preset_del.clicked.connect(self._delete_camera_preset)
+        cam_preset_row.addWidget(cam_preset_del)
+        cam_layout.addLayout(cam_preset_row)
+
+        # --- Standard View buttons ---
+        views_label = QtWidgets.QLabel("Standard Views")
+        views_label.setStyleSheet("color: #aaa; font-size: 10px; margin-top: 2px;")
+        cam_layout.addWidget(views_label)
+        views_grid = QtWidgets.QGridLayout()
+        views_grid.setSpacing(2)
+        for i, name in enumerate(["Front", "Back", "Left", "Right", "Top", "Bottom"]):
+            btn = QtWidgets.QPushButton(name)
+            btn.setStyleSheet(f"background-color: #3a3a3a; {tiny_btn}")
+            btn.clicked.connect(lambda checked, n=name: self._apply_standard_view(n))
+            views_grid.addWidget(btn, i // 3, i % 3)
+        cam_layout.addLayout(views_grid)
+
+        # --- Separator ---
+        sep1 = QtWidgets.QFrame()
+        sep1.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+        sep1.setStyleSheet("background-color: #444;")
+        cam_layout.addWidget(sep1)
+
+        # --- Pitch / Yaw / FOV sliders ---
+        val_style = "color: #8cf; font-size: 10px; min-width: 36px;"
+        lbl_style = "color: #aaa; font-size: 10px;"
+
+        # Pitch (rotation_x)
+        pitch_row = QtWidgets.QHBoxLayout()
+        pitch_lbl = QtWidgets.QLabel("Pitch:")
+        pitch_lbl.setStyleSheet(lbl_style)
+        pitch_lbl.setFixedWidth(34)
+        pitch_row.addWidget(pitch_lbl)
+        self._cam_pitch_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._cam_pitch_slider.setRange(-900, 900)  # /10 = -90..90
+        self._cam_pitch_slider.setValue(0)
+        self._cam_pitch_slider.valueChanged.connect(self._update_pitch)
+        pitch_row.addWidget(self._cam_pitch_slider)
+        self._cam_pitch_val = QtWidgets.QLabel("0.0\u00b0")
+        self._cam_pitch_val.setStyleSheet(val_style)
+        pitch_row.addWidget(self._cam_pitch_val)
+        cam_layout.addLayout(pitch_row)
+
+        # Yaw (rotation_y)
+        yaw_row = QtWidgets.QHBoxLayout()
+        yaw_lbl = QtWidgets.QLabel("Yaw:")
+        yaw_lbl.setStyleSheet(lbl_style)
+        yaw_lbl.setFixedWidth(34)
+        yaw_row.addWidget(yaw_lbl)
+        self._cam_yaw_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._cam_yaw_slider.setRange(-1800, 1800)  # /10 = -180..180
+        self._cam_yaw_slider.setValue(0)
+        self._cam_yaw_slider.valueChanged.connect(self._update_yaw)
+        yaw_row.addWidget(self._cam_yaw_slider)
+        self._cam_yaw_val = QtWidgets.QLabel("0.0\u00b0")
+        self._cam_yaw_val.setStyleSheet(val_style)
+        yaw_row.addWidget(self._cam_yaw_val)
+        cam_layout.addLayout(yaw_row)
+
+        # FOV
+        fov_row = QtWidgets.QHBoxLayout()
+        fov_lbl = QtWidgets.QLabel("FOV:")
+        fov_lbl.setStyleSheet(lbl_style)
+        fov_lbl.setFixedWidth(34)
+        fov_row.addWidget(fov_lbl)
+        self._cam_fov_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._cam_fov_slider.setRange(10, 120)
+        self._cam_fov_slider.setValue(45)
+        self._cam_fov_slider.valueChanged.connect(self._update_fov)
+        fov_row.addWidget(self._cam_fov_slider)
+        self._cam_fov_val = QtWidgets.QLabel("45\u00b0")
+        self._cam_fov_val.setStyleSheet(val_style)
+        fov_row.addWidget(self._cam_fov_val)
+        cam_layout.addLayout(fov_row)
+
+        # --- Separator ---
+        sep2 = QtWidgets.QFrame()
+        sep2.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+        sep2.setStyleSheet("background-color: #444;")
+        cam_layout.addWidget(sep2)
+
+        # Auto-rotate
+        self._cam_auto_rotate_cb = QtWidgets.QCheckBox("Auto Rotate")
+        self._cam_auto_rotate_cb.toggled.connect(self._toggle_auto_rotate)
+        cam_layout.addWidget(self._cam_auto_rotate_cb)
+
+        # Rotation speed
+        cam_speed_row = QtWidgets.QHBoxLayout()
+        speed_lbl = QtWidgets.QLabel("Speed:")
+        speed_lbl.setStyleSheet(lbl_style)
+        speed_lbl.setFixedWidth(34)
+        cam_speed_row.addWidget(speed_lbl)
+        self._cam_speed_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._cam_speed_slider.setRange(1, 50)
+        self._cam_speed_slider.setValue(10)
+        self._cam_speed_slider.valueChanged.connect(self._update_rotation_speed)
+        cam_speed_row.addWidget(self._cam_speed_slider)
+        cam_layout.addLayout(cam_speed_row)
+
+        # Zoom
+        cam_zoom_row = QtWidgets.QHBoxLayout()
+        zoom_lbl = QtWidgets.QLabel("Zoom:")
+        zoom_lbl.setStyleSheet(lbl_style)
+        zoom_lbl.setFixedWidth(34)
+        cam_zoom_row.addWidget(zoom_lbl)
+        self._cam_zoom_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._cam_zoom_slider.setRange(10, 100)
+        self._cam_zoom_slider.setValue(25)
+        self._cam_zoom_slider.valueChanged.connect(self._update_zoom)
+        cam_zoom_row.addWidget(self._cam_zoom_slider)
+        cam_layout.addLayout(cam_zoom_row)
+
+        # --- Separator ---
+        sep3 = QtWidgets.QFrame()
+        sep3.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+        sep3.setStyleSheet("background-color: #444;")
+        cam_layout.addWidget(sep3)
+
+        # Render pass selector
+        cam_pass_row = QtWidgets.QHBoxLayout()
+        cam_pass_row.addWidget(QtWidgets.QLabel("Render Pass:"))
+        self._cam_render_pass_combo = QtWidgets.QComboBox()
+        self._cam_render_pass_combo.addItems(sorted(["Combined", "Normals", "Depth", "Diffuse", "AO"]))
+        self._cam_render_pass_combo.currentTextChanged.connect(self._on_render_pass_changed)
+        cam_pass_row.addWidget(self._cam_render_pass_combo)
+        cam_layout.addLayout(cam_pass_row)
+
+        # Export passes button
+        cam_export_btn = QtWidgets.QPushButton("Export All Passes")
+        cam_export_btn.setStyleSheet(f"background-color: #3a4a5a; {tiny_btn}")
+        cam_export_btn.setToolTip("Export all render passes as separate PNG files")
+        cam_export_btn.clicked.connect(self._export_all_passes)
+        cam_layout.addWidget(cam_export_btn)
+
+        # Reset camera button
+        cam_reset_btn = QtWidgets.QPushButton("Reset Camera")
+        cam_reset_btn.setStyleSheet(f"background-color: #4a3a3a; {tiny_btn}")
+        cam_reset_btn.setToolTip("Reset camera to default orientation and zoom")
+        cam_reset_btn.clicked.connect(self._reset_camera_ui)
+        cam_layout.addWidget(cam_reset_btn)
+
+        cam_layout.addStretch()
+        cam_light_splitter.addWidget(cam_scroll)
+
+        # --- Bottom half: Lighting controls with preset ---
+        self._light_container = QtWidgets.QWidget()
+        light_container_layout = QtWidgets.QVBoxLayout(self._light_container)
+        light_container_layout.setContentsMargins(5, 5, 5, 2)
+        light_container_layout.setSpacing(4)
+
+        # Lighting preset row
+        light_preset_row = QtWidgets.QHBoxLayout()
+        light_preset_row.addWidget(QtWidgets.QLabel("Preset:"))
+        self._lighting_preset_combo = QtWidgets.QComboBox()
+        self._lighting_preset_combo.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
+                                                   QtWidgets.QSizePolicy.Policy.Fixed)
+        self._lighting_preset_combo.currentTextChanged.connect(self._apply_lighting_preset)
+        light_preset_row.addWidget(self._lighting_preset_combo)
+        light_preset_save = QtWidgets.QPushButton("Save")
+        light_preset_save.setStyleSheet(f"background-color: #5a5a2d; {tiny_btn}")
+        light_preset_save.clicked.connect(self._save_lighting_preset)
+        light_preset_row.addWidget(light_preset_save)
+        light_preset_del = QtWidgets.QPushButton("Del")
+        light_preset_del.setStyleSheet(f"background-color: #5a2d2d; {tiny_btn}")
+        light_preset_del.clicked.connect(self._delete_lighting_preset)
+        light_preset_row.addWidget(light_preset_del)
+        light_container_layout.addLayout(light_preset_row)
+
+        # Wrap lighting group in a scroll area so tiles can scroll
+        light_scroll = QtWidgets.QScrollArea()
+        light_scroll.setWidgetResizable(True)
+        light_scroll.setWidget(self._lighting_group)
+        light_scroll.setStyleSheet(
+            "QScrollArea { border: none; background: transparent; }"
+        )
+        light_container_layout.addWidget(light_scroll)
+
+        cam_light_splitter.addWidget(self._light_container)
+        self._light_container.hide()  # Hidden by default; shown when 3D model is loaded
+
+        cam_light_splitter.setSizes([350, 300])
+
+        self.inspector_tabs.addTab(cam_light_tab, "Cameras & Lighting")
+
+        # Reorder tabs: Shaders, Textures, Markup, Cameras & Lighting, Layers, AI
+        desired_order = ["Shaders", "Textures", "Markup", "Cameras & Lighting", "Layers", "AI"]
+        for target_idx, name in enumerate(desired_order):
+            for i in range(self.inspector_tabs.count()):
+                if self.inspector_tabs.tabText(i) == name:
+                    if i != target_idx:
+                        widget = self.inspector_tabs.widget(i)
+                        self.inspector_tabs.removeTab(i)
+                        self.inspector_tabs.insertTab(target_idx, widget, name)
+                    break
 
         # Add inspector to splitter
         self.main_splitter.addWidget(inspector)
@@ -12888,11 +19454,31 @@ class ShaderStudio(QtWidgets.QMainWindow):
         # Connect texture loaded signal - ensures base layer is always created
         self.canvas.textureLoaded.connect(self._on_texture_loaded)
 
+        # Connect animation frame change signal
+        self.canvas.animFrameChanged.connect(self._update_anim_ui)
+
+        # Connect camera changed signal for syncing pitch/yaw/zoom UI
+        self.canvas.cameraChanged.connect(self._sync_all_camera_ui)
+
         # Setup keyboard shortcuts
         self._setup_shortcuts()
 
         # Initialize UI
         self._update_params_ui("Original")
+
+        # Initialize camera/lighting preset combos
+        self._refresh_camera_slot_combo()
+        self._refresh_camera_preset_combo()
+        self._refresh_lighting_preset_combo()
+
+    def closeEvent(self, event):
+        """Save camera state and settings on close."""
+        # Persist active camera state
+        active = CAM_LIGHT_DATA.get("active_camera")
+        if active:
+            CAM_LIGHT_DATA.setdefault("cameras", {})[active] = self.canvas.get_camera_state()
+        save_cam_light_data()
+        super().closeEvent(event)
 
     def _create_menu_bar(self):
         """Create the application menu bar."""
@@ -12939,6 +19525,19 @@ class ShaderStudio(QtWidgets.QMainWindow):
         gif_action.triggered.connect(self.export_gif)
         file_menu.addAction(gif_action)
 
+        svg_action = QtGui.QAction("Export SVG Trace...", self)
+        svg_action.triggered.connect(self.export_svg_trace)
+        svg_action.setEnabled(VIDEO_AVAILABLE)
+        file_menu.addAction(svg_action)
+
+        psd_action = QtGui.QAction("Export PSD Layers...", self)
+        psd_action.triggered.connect(self.export_psd_layers)
+        file_menu.addAction(psd_action)
+
+        sprite_action = QtGui.QAction("Export Sprite Sheet...", self)
+        sprite_action.triggered.connect(self.export_sprite_sheet)
+        file_menu.addAction(sprite_action)
+
         file_menu.addSeparator()
 
         exit_action = QtGui.QAction("E&xit", self)
@@ -12982,6 +19581,19 @@ class ShaderStudio(QtWidgets.QMainWindow):
         reset_action.setShortcut("Ctrl+D")
         reset_action.triggered.connect(self._reset_params)
         edit_menu.addAction(reset_action)
+
+        edit_menu.addSeparator()
+
+        # Transform submenu
+        transform_menu = edit_menu.addMenu("Transform")
+        warp_action = QtGui.QAction("&Warp / Distort...", self)
+        warp_action.triggered.connect(self._show_warp_dialog)
+        transform_menu.addAction(warp_action)
+
+        snapshot_action = QtGui.QAction("Take &Snapshot", self)
+        snapshot_action.setShortcut("Ctrl+Shift+S")
+        snapshot_action.triggered.connect(lambda: self._take_snapshot())
+        edit_menu.addAction(snapshot_action)
 
         # View menu
         view_menu = menubar.addMenu("&View")
@@ -13097,18 +19709,28 @@ class ShaderStudio(QtWidgets.QMainWindow):
             if ext in ['.obj', '.gltf', '.glb']:
                 if self.canvas.load_3d_model(path):
                     self.image_info.setText(f"3D Model: {os.path.basename(path)}")
-                    self.controls_3d.show()
+                    self._light_container.show()
+                    self._sync_lighting_ui()
+                    self._refresh_tex_material_combo()
+                    self._sync_zoom_slider()
                     self.mode_2d_btn.setEnabled(True)
                     self._hide_gif_controls()
                     add_recent_file(path)
             else:
                 self.canvas.set_2d_mode()
-                self.controls_3d.hide()
+                self._light_container.hide()
                 self.mode_2d_btn.setEnabled(False)
                 if self.canvas.load_texture(path):
                     self._on_image_loaded(path)
                     add_recent_file(path)
             self._update_recent_menu()
+
+    def _switch_to_markup_tab(self):
+        """Switch the inspector panel to the Markup tab."""
+        for i in range(self.inspector_tabs.count()):
+            if self.inspector_tabs.tabText(i) == "Markup":
+                self.inspector_tabs.setCurrentIndex(i)
+                break
 
     def _on_texture_loaded(self, path):
         """Signal handler: called whenever canvas loads a texture, regardless of source.
@@ -13130,6 +19752,45 @@ class ShaderStudio(QtWidgets.QMainWindow):
             self.image_info.setText(f"{os.path.basename(path)} ({size[0]}x{size[1]})")
             self._hide_gif_controls()
 
+        # Switch to Markup tab for 2D images
+        if not self.canvas.mode_3d:
+            self._switch_to_markup_tab()
+
+        # Clear paint state for the new image
+        self.canvas._clear_paint_state()
+        self._set_active_tool("none")
+
+        # Initialize layer system with Background layer
+        self.canvas._layers.clear()
+        self.canvas._layers.append({
+            'name': 'Background',
+            'shader': 'Original',
+            'params': {},
+            'visible': True,
+            'locked': False,
+            'opacity': 1.0,
+            'blend_mode': 'normal',
+        })
+        self._refresh_layer_list()
+
+        # Initialize animation with first frame
+        self.canvas._anim_frames.clear()
+        self.canvas._anim_current_frame = 0
+        self.canvas._anim_playing = False
+        self.canvas._anim_timer.stop()
+        self.canvas._anim_frames.append({
+            'layers': copy.deepcopy(self.canvas._layers),
+            'duration': int(1000 / self.canvas._anim_fps),
+        })
+
+        # Show animation timeline
+        if not self.canvas.mode_3d:
+            self.anim_timeline.show()
+        else:
+            self.anim_timeline.hide()
+        self._refresh_frame_strip()
+        self._update_anim_ui()
+
     def _clear_recent(self):
         """Clear recent files list."""
         global RECENT_FILES
@@ -13146,6 +19807,39 @@ class ShaderStudio(QtWidgets.QMainWindow):
         # Escape to exit fullscreen
         escape_shortcut = QtGui.QShortcut(QtGui.QKeySequence("Escape"), self)
         escape_shortcut.activated.connect(self._exit_fullscreen)
+
+        # Paint tool shortcuts
+        for key, tool_id in [("V", "none"), ("B", "pencil"), ("E", "eraser"),
+                             ("L", "line"), ("U", "rect"), ("O", "ellipse"),
+                             ("G", "fill"), ("W", "wand"), ("T", "bg_erase"),
+                             ("I", "eyedropper"), ("S", "smudge"), ("C", "clone"),
+                             ("F", "blur_brush"), ("D", "dodge_burn"), ("X", "text"),
+                             ("P", "polygon"), ("H", "gradient"), ("M", "select_rect"),
+                             ("A", "lasso"), ("Q", "transform"), ("K", "crop"),
+                             ("J", "liquify"), ("N", "pen")]:
+            sc = QtGui.QShortcut(QtGui.QKeySequence(key), self)
+            sc.activated.connect(lambda tid=tool_id: self._set_active_tool(tid))
+
+        # Ctrl+D to deselect
+        deselect_sc = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+D"), self)
+        deselect_sc.activated.connect(self._deselect_all)
+
+        # Bracket keys for brush size
+        dec_size = QtGui.QShortcut(QtGui.QKeySequence("["), self)
+        dec_size.activated.connect(lambda: self._adjust_brush_size(-1))
+        inc_size = QtGui.QShortcut(QtGui.QKeySequence("]"), self)
+        inc_size.activated.connect(lambda: self._adjust_brush_size(1))
+
+        # Enter to finish pen path
+        finish_pen_sc = QtGui.QShortcut(QtGui.QKeySequence("Return"), self)
+        finish_pen_sc.activated.connect(lambda: (self.canvas._finish_pen_path(), self._refresh_layer_list()))
+
+    def _adjust_brush_size(self, delta):
+        """Adjust brush size by delta, clamped to 1..100."""
+        new_size = max(1, min(200, self.canvas._brush_size + delta))
+        self.canvas._brush_size = new_size
+        if hasattr(self, '_brush_size_slider'):
+            self._brush_size_slider.setValue(new_size)
 
     # --- COLOR PICKER ---
     def _enable_color_picker(self):
@@ -13165,6 +19859,422 @@ class ShaderStudio(QtWidgets.QMainWindow):
 
         # Copy to clipboard
         QtWidgets.QApplication.clipboard().setText(hex_color)
+
+        # Also update paint color if paint tools are active
+        if hasattr(self, '_paint_color_btn'):
+            self.canvas._paint_color = (r, g, b, a)
+            self._paint_color_btn.setStyleSheet(
+                f"background-color: rgb({r}, {g}, {b}); border: 2px solid #888; min-height: 24px;"
+            )
+
+    # --- PAINT TOOLS ---
+    def _set_active_tool(self, tool_id):
+        """Set the active paint tool and update button highlights using registry."""
+        self.canvas._active_tool = tool_id
+
+        # Update button checked states (exclusive toggle)
+        for tid, btn in self._tool_buttons.items():
+            btn.setChecked(tid == tool_id)
+            if tid == tool_id:
+                btn.setStyleSheet(self._tool_btn_active)
+            else:
+                btn.setStyleSheet(self._tool_btn_style)
+
+        # Update cursor based on tool
+        cursor_map = {
+            "none": QtCore.Qt.CursorShape.ArrowCursor,
+            "fill": QtCore.Qt.CursorShape.PointingHandCursor,
+            "bg_erase": QtCore.Qt.CursorShape.PointingHandCursor,
+            "eyedropper": QtCore.Qt.CursorShape.CrossCursor,
+            "text": QtCore.Qt.CursorShape.IBeamCursor,
+            "transform": QtCore.Qt.CursorShape.SizeAllCursor,
+            "crop": QtCore.Qt.CursorShape.CrossCursor,
+        }
+        self.canvas.setCursor(cursor_map.get(tool_id, QtCore.Qt.CursorShape.CrossCursor))
+
+        # Paint options always visible in Markup tab; no need to hide/show
+
+        # Registry-based option row visibility
+        if hasattr(self, '_tool_option_map') and hasattr(self, '_option_row_widgets'):
+            visible_options = self._tool_option_map.get(tool_id, [])
+            for name, widget in self._option_row_widgets.items():
+                widget.setVisible(name in visible_options)
+
+    def _deselect_all(self):
+        """Clear the magic wand selection."""
+        if self.canvas._selection_mask is not None:
+            self.canvas.clear_selection()
+
+    def _on_brush_size_changed(self, value):
+        """Update brush size from slider."""
+        self.canvas._brush_size = value
+        if hasattr(self, '_brush_size_label'):
+            self._brush_size_label.setText(f"{value}px")
+
+    def _on_brush_opacity_changed(self, value):
+        """Update brush opacity from slider."""
+        self.canvas._brush_opacity = value
+        if hasattr(self, '_opacity_label'):
+            self._opacity_label.setText(str(value))
+
+    def _on_tolerance_changed(self, value):
+        """Update tolerance for fill/wand tools."""
+        self.canvas._tolerance = value
+        if hasattr(self, '_tolerance_label'):
+            self._tolerance_label.setText(str(value))
+
+    def _on_fill_mode_changed(self, mode):
+        """Update fill mode for shape tools."""
+        self.canvas._fill_mode = mode
+
+    def _pick_paint_color(self):
+        """Open a color dialog to pick the paint color."""
+        current = self.canvas._paint_color
+        initial = QtGui.QColor(current[0], current[1], current[2], current[3])
+        color = QtWidgets.QColorDialog.getColor(
+            initial, self, "Pick Paint Color",
+            QtWidgets.QColorDialog.ColorDialogOption.ShowAlphaChannel
+        )
+        if color.isValid():
+            r, g, b, a = color.red(), color.green(), color.blue(), color.alpha()
+            self.canvas._paint_color = (r, g, b, a)
+            self._paint_color_btn.setStyleSheet(
+                f"background-color: rgb({r}, {g}, {b}); border: 2px solid #888; min-height: 24px;"
+            )
+
+    # --- Color swatch methods ---
+    def _rebuild_swatch_grid(self):
+        """Rebuild the color swatch grid from canvas._color_swatches."""
+        layout = self._swatch_grid.layout()
+        # Clear existing buttons
+        while layout.count():
+            item = layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        self._swatch_buttons = []
+        swatches = self.canvas._color_swatches if hasattr(self, 'canvas') else [
+            (0, 0, 0, 255), (255, 255, 255, 255), (255, 0, 0, 255),
+            (0, 255, 0, 255), (0, 0, 255, 255), (255, 255, 0, 255),
+            (255, 0, 255, 255), (0, 255, 255, 255), (128, 128, 128, 255),
+            (128, 0, 0, 255), (0, 128, 0, 255), (0, 0, 128, 255),
+            (255, 128, 0, 255), (128, 0, 255, 255), (0, 128, 128, 255),
+            (255, 200, 200, 255), (200, 255, 200, 255), (200, 200, 255, 255),
+            (64, 64, 64, 255), (192, 192, 192, 255),
+        ]
+        cols = 10
+        for i, color in enumerate(swatches):
+            btn = QtWidgets.QPushButton("")
+            btn.setFixedSize(18, 18)
+            r, g, b, a = color
+            btn.setStyleSheet(f"background-color: rgb({r},{g},{b}); border: 1px solid #555; padding: 0px;")
+            btn.setToolTip(f"RGB({r},{g},{b})")
+            btn.clicked.connect(lambda checked, c=color: self._select_swatch_color(c))
+            layout.addWidget(btn, i // cols, i % cols)
+            self._swatch_buttons.append(btn)
+
+    def _select_swatch_color(self, color):
+        """Set paint color from a swatch."""
+        self.canvas._paint_color = color
+        r, g, b, a = color
+        self._paint_color_btn.setStyleSheet(
+            f"background-color: rgb({r}, {g}, {b}); border: 2px solid #888; min-height: 24px;"
+        )
+
+    def _add_color_swatch(self):
+        """Add current paint color to the swatch palette."""
+        color = self.canvas._paint_color
+        if color not in self.canvas._color_swatches:
+            self.canvas._color_swatches.append(color)
+            self._rebuild_swatch_grid()
+
+    def _remove_color_swatch(self):
+        """Remove the last swatch from the palette."""
+        if self.canvas._color_swatches:
+            self.canvas._color_swatches.pop()
+            self._rebuild_swatch_grid()
+
+    # --- History snapshot methods ---
+    def _take_snapshot(self, name=None):
+        """Take a named snapshot of the current paint surface."""
+        if self.canvas._paint_surface is None:
+            return
+        if name is None:
+            name = f"Snapshot {len(self.canvas._history_snapshots) + 1}"
+        data = self.canvas._paint_surface.copy()
+        self.canvas._history_snapshots.append((name, data))
+        if len(self.canvas._history_snapshots) > self.canvas._max_snapshots:
+            self.canvas._history_snapshots.pop(0)
+        if hasattr(self, '_history_list'):
+            self._refresh_history_list()
+
+    def _restore_snapshot(self, index):
+        """Restore a snapshot by index."""
+        if index < 0 or index >= len(self.canvas._history_snapshots):
+            return
+        name, data = self.canvas._history_snapshots[index]
+        if self.canvas._paint_surface is not None:
+            self.canvas._paint_surface[:] = data
+            self.canvas._upload_paint_overlay()
+            self.canvas.update()
+
+    def _refresh_history_list(self):
+        """Refresh the history panel list."""
+        if not hasattr(self, '_history_list'):
+            return
+        self._history_list.clear()
+        for i, (name, _) in enumerate(self.canvas._history_snapshots):
+            self._history_list.addItem(name)
+
+    def _delete_snapshot(self):
+        """Delete the selected snapshot."""
+        row = self._history_list.currentRow()
+        if row < 0 or row >= len(self.canvas._history_snapshots):
+            return
+        self.canvas._history_snapshots.pop(row)
+        self._refresh_history_list()
+
+    # --- Warp / Distort Transform ---
+    def _show_warp_dialog(self):
+        """Show warp/distort transform dialog."""
+        if self.canvas._paint_surface is None:
+            return
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Warp / Distort")
+        dlg.setMinimumSize(300, 200)
+        layout = QtWidgets.QVBoxLayout(dlg)
+
+        # Warp mode selector
+        mode_row = QtWidgets.QHBoxLayout()
+        mode_row.addWidget(QtWidgets.QLabel("Mode:"))
+        mode_combo = QtWidgets.QComboBox()
+        mode_combo.addItems(["Bulge", "Pinch", "Twirl", "Wave", "Spherize", "Stretch"])
+        mode_row.addWidget(mode_combo)
+        layout.addLayout(mode_row)
+
+        # Strength slider
+        strength_row = QtWidgets.QHBoxLayout()
+        strength_row.addWidget(QtWidgets.QLabel("Strength:"))
+        strength_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        strength_slider.setMinimum(-100)
+        strength_slider.setMaximum(100)
+        strength_slider.setValue(50)
+        strength_label = QtWidgets.QLabel("50%")
+        strength_slider.valueChanged.connect(lambda v: strength_label.setText(f"{v}%"))
+        strength_row.addWidget(strength_slider)
+        strength_row.addWidget(strength_label)
+        layout.addLayout(strength_row)
+
+        # Radius slider
+        radius_row = QtWidgets.QHBoxLayout()
+        radius_row.addWidget(QtWidgets.QLabel("Radius:"))
+        radius_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        radius_slider.setMinimum(10)
+        radius_slider.setMaximum(100)
+        radius_slider.setValue(50)
+        radius_label = QtWidgets.QLabel("50%")
+        radius_slider.valueChanged.connect(lambda v: radius_label.setText(f"{v}%"))
+        radius_row.addWidget(radius_slider)
+        radius_row.addWidget(radius_label)
+        layout.addLayout(radius_row)
+
+        # Buttons
+        btn_row = QtWidgets.QHBoxLayout()
+        apply_btn = QtWidgets.QPushButton("Apply")
+        cancel_btn = QtWidgets.QPushButton("Cancel")
+        cancel_btn.clicked.connect(dlg.reject)
+        btn_row.addWidget(apply_btn)
+        btn_row.addWidget(cancel_btn)
+        layout.addLayout(btn_row)
+
+        def apply_warp():
+            mode = mode_combo.currentText().lower()
+            strength = strength_slider.value() / 100.0
+            radius_pct = radius_slider.value() / 100.0
+            self._apply_warp(mode, strength, radius_pct)
+            dlg.accept()
+
+        apply_btn.clicked.connect(apply_warp)
+        dlg.exec()
+
+    def _apply_warp(self, mode, strength, radius_pct):
+        """Apply warp/distort to the paint surface."""
+        surface = self.canvas._paint_surface
+        if surface is None:
+            return
+        self.canvas._push_paint_undo()
+        h, w = surface.shape[:2]
+        cx, cy = w / 2.0, h / 2.0
+        max_r = min(w, h) / 2.0 * radius_pct
+
+        # Create coordinate grids
+        yy, xx = np.mgrid[0:h, 0:w].astype(np.float64)
+        dx = xx - cx
+        dy = yy - cy
+        dist = np.sqrt(dx ** 2 + dy ** 2)
+        norm_dist = np.clip(dist / max(max_r, 1), 0, 1)
+        falloff = (1.0 - norm_dist ** 2)
+        falloff[dist > max_r] = 0
+
+        if mode == "bulge":
+            factor = 1.0 + strength * falloff
+            src_x = cx + dx / factor
+            src_y = cy + dy / factor
+        elif mode == "pinch":
+            factor = 1.0 + strength * falloff
+            src_x = cx + dx * factor
+            src_y = cy + dy * factor
+        elif mode == "twirl":
+            angle = strength * falloff * math.pi
+            cos_a, sin_a = np.cos(angle), np.sin(angle)
+            src_x = cx + dx * cos_a - dy * sin_a
+            src_y = cy + dx * sin_a + dy * cos_a
+        elif mode == "wave":
+            src_x = xx + strength * 20 * np.sin(yy / max(h, 1) * math.pi * 4) * falloff
+            src_y = yy + strength * 20 * np.sin(xx / max(w, 1) * math.pi * 4) * falloff
+        elif mode == "spherize":
+            safe_dist = np.clip(dist, 1e-6, None)
+            theta = np.arcsin(np.clip(norm_dist, -1, 1))
+            r_new = max_r * np.tan(theta * strength) / np.tan(strength + 1e-6)
+            src_x = cx + dx / safe_dist * r_new
+            src_y = cy + dy / safe_dist * r_new
+            # Keep pixels outside radius unchanged
+            outside = dist > max_r
+            src_x[outside] = xx[outside]
+            src_y[outside] = yy[outside]
+        elif mode == "stretch":
+            src_x = xx + strength * 30 * falloff * np.sign(dx)
+            src_y = yy.copy()
+        else:
+            return
+
+        # Clamp and sample
+        src_x = np.clip(src_x, 0, w - 1).astype(np.int32)
+        src_y = np.clip(src_y, 0, h - 1).astype(np.int32)
+        self.canvas._paint_surface = surface[src_y, src_x]
+        self.canvas._commit_paint_surface()
+
+    def _on_hardness_changed(self, value):
+        self.canvas._brush_hardness = value / 100.0
+        if hasattr(self, '_hardness_label'):
+            self._hardness_label.setText(f"{value}%")
+
+    def _on_tip_changed(self, text):
+        self.canvas._brush_tip = text.lower()
+
+    def _on_spacing_changed(self, value):
+        self.canvas._brush_spacing = value / 100.0
+        if hasattr(self, '_spacing_label'):
+            self._spacing_label.setText(f"{value}%")
+
+    # --- Color Harmony Tools ---
+    def _generate_harmony(self, harmony_type):
+        """Generate harmonious colors based on current paint color."""
+        r, g, b, a = self.canvas._paint_color
+        # Convert RGB to HSV
+        import colorsys
+        h, s, v = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+        colors = []
+        if harmony_type == "complementary":
+            colors = [
+                (h, s, v),
+                ((h + 0.5) % 1.0, s, v),
+            ]
+        elif harmony_type == "triadic":
+            colors = [
+                (h, s, v),
+                ((h + 1.0 / 3.0) % 1.0, s, v),
+                ((h + 2.0 / 3.0) % 1.0, s, v),
+            ]
+        elif harmony_type == "analogous":
+            colors = [
+                ((h - 1.0 / 12.0) % 1.0, s, v),
+                (h, s, v),
+                ((h + 1.0 / 12.0) % 1.0, s, v),
+            ]
+        elif harmony_type == "split_complementary":
+            colors = [
+                (h, s, v),
+                ((h + 5.0 / 12.0) % 1.0, s, v),
+                ((h + 7.0 / 12.0) % 1.0, s, v),
+            ]
+        elif harmony_type == "tetradic":
+            colors = [
+                (h, s, v),
+                ((h + 0.25) % 1.0, s, v),
+                ((h + 0.5) % 1.0, s, v),
+                ((h + 0.75) % 1.0, s, v),
+            ]
+        # Convert back to RGBA and add to swatches
+        for hh, ss, vv in colors:
+            cr, cg, cb = colorsys.hsv_to_rgb(hh, ss, vv)
+            rgba = (int(cr * 255), int(cg * 255), int(cb * 255), 255)
+            if rgba not in self.canvas._color_swatches:
+                self.canvas._color_swatches.append(rgba)
+        self._rebuild_swatch_grid()
+
+    def _load_custom_brush(self):
+        """Load an image file as a custom brush tip."""
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Load Brush Tip Image", "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.tga)")
+        if not path:
+            return
+        try:
+            from PIL import Image
+            img = Image.open(path).convert("L")  # Convert to grayscale
+            # Resize to fit brush size range
+            size = min(img.width, img.height, 128)
+            img = img.resize((size, size), Image.Resampling.LANCZOS)
+            brush_data = np.array(img, dtype=np.float32) / 255.0
+            self.canvas._custom_brush_image = brush_data
+            self.canvas._custom_brush_name = path.split("/")[-1].split("\\")[-1]
+            self._custom_brush_label.setText(self.canvas._custom_brush_name[:20])
+            # Switch brush tip to custom
+            self.canvas._brush_tip = "custom"
+        except Exception as e:
+            print(f"Failed to load brush tip: {e}")
+
+    def _on_scatter_changed(self, value):
+        self.canvas._brush_scatter = value / 100.0
+        if hasattr(self, '_scatter_label'):
+            self._scatter_label.setText(f"{value}%")
+
+    def _on_gradient_type_changed(self, text):
+        self.canvas._gradient_type = text.lower()
+
+    def _pick_gradient_color2(self):
+        current = self.canvas._gradient_color2
+        initial = QtGui.QColor(current[0], current[1], current[2], current[3])
+        color = QtWidgets.QColorDialog.getColor(
+            initial, self, "Pick Gradient End Color",
+            QtWidgets.QColorDialog.ColorDialogOption.ShowAlphaChannel
+        )
+        if color.isValid():
+            r, g, b, a = color.red(), color.green(), color.blue(), color.alpha()
+            self.canvas._gradient_color2 = (r, g, b, a)
+            self._gradient_color2_btn.setStyleSheet(
+                f"background-color: rgb({r}, {g}, {b}); border: 2px solid #888; min-height: 20px; min-width: 30px;"
+            )
+
+    def _on_blur_strength_changed(self, value):
+        self.canvas._blur_strength = value
+
+    def _on_dodge_burn_mode_changed(self, text):
+        self.canvas._dodge_burn_mode = text.lower()
+
+    def _on_exposure_changed(self, value):
+        self.canvas._dodge_burn_exposure = value / 100.0
+
+    def _on_select_mode_changed(self, text):
+        self.canvas._select_mode = text.lower()
+
+    def _on_lasso_mode_changed(self, text):
+        self.canvas._select_mode = "poly_lasso" if text == "Polygon" else "lasso"
+
+    def _on_transform_mode_changed(self, text):
+        mode_map = {"Move": "move", "Flip H": "flip_h", "Flip V": "flip_v"}
+        self.canvas._transform_mode = mode_map.get(text, "move")
 
     # --- PARAMETER TOOLS ---
     def _randomize_params(self):
@@ -13228,8 +20338,9 @@ class ShaderStudio(QtWidgets.QMainWindow):
             ext = os.path.splitext(path)[1].lower()
 
             if ext in ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif']:
+                self._batch_nav_clear()  # Clear batch navigation on drag-and-drop
                 self.canvas.set_2d_mode()
-                self.controls_3d.hide()
+                self._light_container.hide()
                 self.mode_2d_btn.setEnabled(False)
                 if self.canvas.load_texture(path):
                     self._on_image_loaded(path)
@@ -13238,7 +20349,9 @@ class ShaderStudio(QtWidgets.QMainWindow):
             elif ext in ['.obj', '.gltf', '.glb']:
                 if self.canvas.load_3d_model(path):
                     self.image_info.setText(f"3D Model: {os.path.basename(path)}")
-                    self.controls_3d.show()
+                    self._light_container.show()
+                    self._sync_lighting_ui()
+                    self._sync_zoom_slider()
                     self.mode_2d_btn.setEnabled(True)
                     self._hide_gif_controls()
                     add_recent_file(path)
@@ -13284,7 +20397,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         mode_row = QtWidgets.QHBoxLayout()
         mode_row.addWidget(QtWidgets.QLabel("Blend Mode:"))
         mode_combo = QtWidgets.QComboBox()
-        mode_combo.addItems(["multiply", "screen", "overlay", "soft_light", "add"])
+        mode_combo.addItems(sorted(["multiply", "screen", "overlay", "soft_light", "add"]))
         mode_row.addWidget(mode_combo)
         layout.addLayout(mode_row)
 
@@ -13623,11 +20736,12 @@ class ShaderStudio(QtWidgets.QMainWindow):
 
         if category == "Custom Presets":
             # Show only user presets
-            for name in USER_PRESETS.keys():
+            for name in sorted(USER_PRESETS.keys()):
                 base_shader = USER_PRESETS[name].get("base_shader", "Original")
                 self.shader_combo.addItem(f"{name} ({base_shader})")
         else:
-            for name, shader in SHADERS.items():
+            for name in sorted(SHADERS.keys()):
+                shader = SHADERS[name]
                 if category == "All" or shader.get("category") == category:
                     self.shader_combo.addItem(name)
 
@@ -13665,20 +20779,13 @@ class ShaderStudio(QtWidgets.QMainWindow):
     def _on_ai_model_changed(self, model_name):
         """Update when AI model selection changes."""
         if model_name == "Select AI Model":
-            # Hide the prompt container when no model is selected
-            self.ai_prompt_container.hide()
             return
+        # Model info is now shown via the AI tab chat if needed
 
-        # Show the prompt container when a model is selected
-        self.ai_prompt_container.show()
-
-        if model_name in AI_MODELS:
-            model = AI_MODELS[model_name]
-            self.ai_response_label.setText(model.get("description", ""))
-
-    def _generate_ai_effect(self):
+    def _generate_ai_effect(self, prompt=None):
         """Generate and apply shader effect based on user prompt."""
-        prompt = self.ai_prompt_input.toPlainText().strip()
+        if prompt is None:
+            prompt = self.ai_chat_input.toPlainText().strip()
         if not prompt:
             self.ai_response_label.setText("Please enter a description of the effect you want.")
             return
@@ -13958,15 +21065,505 @@ Only respond with valid JSON, no other text. Example:
     def _use_suggestion(self, suggestion, dialog):
         """Use the selected suggestion."""
         if suggestion:
-            self.ai_prompt_input.setPlainText(suggestion)
+            self.ai_chat_input.setPlainText(suggestion)
             dialog.accept()
-            self._generate_ai_effect()
+            self._generate_ai_effect(suggestion)
 
     def _apply_quick_ai_preset(self, preset_name):
         """Apply a quick AI preset."""
         if preset_name in QUICK_AI_PROMPTS:
-            self.ai_prompt_input.setPlainText(QUICK_AI_PROMPTS[preset_name])
-            self._generate_ai_effect()
+            self.ai_chat_input.setPlainText(QUICK_AI_PROMPTS[preset_name])
+            self._ai_chat_send()
+
+    # ===== AI TAB METHODS =====
+
+    def _ai_chat_send(self):
+        """Send a message in the AI chat and route to the appropriate handler."""
+        prompt = self.ai_chat_input.toPlainText().strip()
+        if not prompt:
+            return
+
+        self._ai_append_chat("user", prompt)
+        self.ai_chat_input.clear()
+
+        model_name = self.ai_model_combo.currentText()
+        if model_name == "Select AI Model":
+            self._ai_append_chat("assistant",
+                "Please select an AI model from the dropdown first.")
+            return
+
+        model_config = AI_MODELS.get(model_name, {})
+        model_type = model_config.get("type", "local")
+
+        # Determine intent: image generation vs shader/effect
+        prompt_lower = prompt.lower()
+        image_keywords = [
+            "generate image", "create image", "make image", "draw me",
+            "generate a picture", "create a photo", "make a photo",
+            "generate art", "create art", "dalle", "image of",
+            "paint me", "picture of", "illustration of",
+        ]
+        is_image_request = any(kw in prompt_lower for kw in image_keywords)
+
+        QtWidgets.QApplication.processEvents()
+
+        if is_image_request and model_type == "openai":
+            self._ai_generate_image(prompt, model_config)
+        elif is_image_request and model_type != "openai":
+            self._ai_append_chat("assistant",
+                "Image generation requires an OpenAI model (for DALL-E 3). "
+                "Please select a GPT model, or rephrase as a shader request.")
+        elif model_type == "local":
+            # Use built-in keyword matching for shader selection
+            result = self._interpret_prompt_locally(prompt)
+            if result:
+                self._apply_interpreted_effect(result)
+                shader_name = result.get("shader", "Unknown")
+                self._ai_append_chat("assistant", f"Applied shader: {shader_name}")
+            else:
+                self._ai_append_chat("assistant",
+                    "Could not match your request to a built-in shader. "
+                    "Try keywords like 'outline', 'glow', 'vintage', etc. "
+                    "For custom shader code generation, select an external AI model.")
+        else:
+            # Use external AI API for shader code generation
+            self._ai_generate_shader(prompt, model_config)
+
+    def _ai_append_chat(self, role, content):
+        """Append a styled message to the AI chat display."""
+        import re as _re
+        self._ai_chat_history.append({"role": role, "content": content})
+
+        # Escape HTML in content
+        safe = content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        safe = safe.replace("\n", "<br>")
+
+        if role == "user":
+            html = (
+                '<div style="text-align: right; margin: 4px 0;">'
+                '<span style="background-color: #3a4a5a; padding: 4px 8px; '
+                'border-radius: 8px; color: #ddd; font-size: 11px; '
+                'display: inline-block; max-width: 85%;">'
+                f'{safe}</span></div>'
+            )
+            self.ai_chat_display.append(html)
+        else:
+            # Check for GLSL code blocks in the raw content
+            code_match = _re.search(r'```(?:glsl)?\s*\n?(.*?)```', content, _re.DOTALL)
+            if code_match:
+                glsl_code = code_match.group(1).strip()
+                self.ai_code_editor.setPlainText(glsl_code)
+                # Replace code block with a note in the displayed text
+                display = content[:code_match.start()] + \
+                    "\n[Shader code loaded into editor above]\n" + \
+                    content[code_match.end():]
+                safe = display.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                safe = safe.replace("\n", "<br>")
+
+            html = (
+                '<div style="text-align: left; margin: 4px 0;">'
+                '<span style="background-color: #2d3d2d; padding: 4px 8px; '
+                'border-radius: 8px; color: #ddd; font-size: 11px; '
+                'display: inline-block; max-width: 85%;">'
+                f'{safe}</span></div>'
+            )
+            self.ai_chat_display.append(html)
+
+        # Scroll to bottom
+        sb = self.ai_chat_display.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _ai_chat_api_call(self, api_key, model_config, system_prompt, user_prompt,
+                          max_tokens=1500):
+        """Call an AI API and return the raw text response."""
+        import json as _json
+        import urllib.request
+
+        model_type = model_config.get("type")
+        model = model_config.get("model", "")
+
+        timeout = model_config.get("timeout", 120)
+
+        try:
+            if model_type == "openai":
+                base = model_config.get("base_url", "https://api.openai.com")
+                url = f"{base.rstrip('/')}/v1/chat/completions"
+                headers = {"Content-Type": "application/json"}
+                if api_key and api_key != "not-needed":
+                    headers["Authorization"] = f"Bearer {api_key}"
+                body = {
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "max_tokens": max_tokens,
+                    "temperature": 0.7,
+                }
+                req = urllib.request.Request(
+                    url, data=_json.dumps(body).encode(), headers=headers
+                )
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    result = _json.loads(resp.read().decode())
+                    return result["choices"][0]["message"]["content"]
+
+            elif model_type == "anthropic":
+                base = model_config.get("base_url", "https://api.anthropic.com")
+                url = f"{base.rstrip('/')}/v1/messages"
+                headers = {
+                    "Content-Type": "application/json",
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                }
+                body = {
+                    "model": model,
+                    "max_tokens": max_tokens,
+                    "system": system_prompt,
+                    "messages": [{"role": "user", "content": user_prompt}],
+                }
+                req = urllib.request.Request(
+                    url, data=_json.dumps(body).encode(), headers=headers
+                )
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    result = _json.loads(resp.read().decode())
+                    return result["content"][0]["text"]
+
+            elif model_type == "google":
+                base = model_config.get(
+                    "base_url", "https://generativelanguage.googleapis.com"
+                )
+                url = (
+                    f"{base.rstrip('/')}/v1beta/models/"
+                    f"{model}:generateContent?key={api_key}"
+                )
+                headers = {"Content-Type": "application/json"}
+                body = {
+                    "contents": [
+                        {"parts": [{"text": f"{system_prompt}\n\nUser request: {user_prompt}"}]}
+                    ],
+                    "generationConfig": {
+                        "maxOutputTokens": max_tokens,
+                        "temperature": 0.7,
+                    },
+                }
+                req = urllib.request.Request(
+                    url, data=_json.dumps(body).encode(), headers=headers
+                )
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    result = _json.loads(resp.read().decode())
+                    return result["candidates"][0]["content"]["parts"][0]["text"]
+
+        except Exception as e:
+            print(f"AI Chat API error: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def _resolve_api_key(self, model_config):
+        """Resolve API key from env var, direct config, or mark as not needed."""
+        import os
+        api_key = ""
+        env_var = model_config.get("api_key_env", "")
+        if env_var:
+            api_key = os.environ.get(env_var, "")
+        if not api_key:
+            api_key = model_config.get("api_key", "")
+        if not api_key and model_config.get("base_url"):
+            # Local servers typically don't need authentication
+            api_key = "not-needed"
+        return api_key
+
+    def _ai_generate_shader(self, prompt, model_config):
+        """Generate a GLSL shader via an external AI API."""
+        self._ai_append_chat("assistant", "Generating shader code...")
+        QtWidgets.QApplication.processEvents()
+
+        api_key = self._resolve_api_key(model_config)
+
+        if not api_key:
+            env_var = model_config.get("api_key_env", "")
+            self._ai_append_chat("assistant",
+                f"API key not found. Set the {env_var} environment variable, "
+                f"or configure a key via the \u2699 Manage Models dialog.")
+            return
+
+        system_prompt = (
+            "You are a GLSL shader expert. Generate complete OpenGL 3.3 core profile "
+            "fragment shaders. Your shaders MUST follow this exact structure:\n\n"
+            "```glsl\n"
+            "#version 330 core\n"
+            "uniform sampler2D u_texture;\n"
+            "uniform vec2 u_resolution;\n"
+            "// Add your custom float uniforms here\n"
+            "in vec2 v_uv;\n"
+            "out vec4 f_color;\n\n"
+            "void main() {\n"
+            "    vec4 color = texture(u_texture, v_uv);\n"
+            "    // Your shader logic here\n"
+            "    f_color = vec4(clamp(result.rgb, 0.0, 1.0), color.a);\n"
+            "}\n"
+            "```\n\n"
+            "Rules:\n"
+            "- Output variable MUST be f_color (NOT fragColor)\n"
+            "- Always include u_texture and u_resolution uniforms\n"
+            "- Use v_uv for texture coordinates\n"
+            "- Custom parameters should be uniform float with descriptive names\n"
+            "- Wrap your shader code in ```glsl code blocks\n"
+            "- After the code block, list custom uniforms as JSON:\n"
+            '  {"uniforms": {"param_name": {"min": 0.0, "max": 1.0, "default": 0.5}}}\n'
+            "- Briefly explain what the shader does"
+        )
+
+        try:
+            response = self._ai_chat_api_call(
+                api_key, model_config, system_prompt, prompt, max_tokens=1500
+            )
+            if response:
+                self._ai_append_chat("assistant", response)
+            else:
+                self._ai_append_chat("assistant", "Failed to get a response from the AI.")
+        except Exception as e:
+            self._ai_append_chat("assistant", f"Error: {str(e)[:150]}")
+
+    def _ai_generate_image(self, prompt, model_config):
+        """Generate an image using DALL-E 3 and load it into the viewport."""
+        import tempfile
+        self._ai_append_chat("assistant", "Generating image with DALL-E 3...")
+        QtWidgets.QApplication.processEvents()
+
+        api_key = self._resolve_api_key(model_config)
+        if not api_key or api_key == "not-needed":
+            self._ai_append_chat("assistant",
+                "Image generation requires an OpenAI API key. "
+                "Set OPENAI_API_KEY or configure a key via \u2699 Manage Models.")
+            return
+
+        try:
+            import json as _json
+            import urllib.request
+
+            url = "https://api.openai.com/v1/images/generations"
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            }
+            body = {
+                "model": "dall-e-3",
+                "prompt": prompt,
+                "n": 1,
+                "size": "1024x1024",
+                "response_format": "url",
+            }
+
+            req = urllib.request.Request(
+                url, data=_json.dumps(body).encode(), headers=headers
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                result = _json.loads(resp.read().decode())
+                image_url = result["data"][0]["url"]
+                revised = result["data"][0].get("revised_prompt", "")
+
+            # Download image to temp file
+            temp_path = os.path.join(
+                tempfile.gettempdir(),
+                f"shader_studio_ai_{id(self) % 99999}.png"
+            )
+            urllib.request.urlretrieve(image_url, temp_path)
+
+            # Load into viewport
+            self.canvas.set_2d_mode()
+            self._light_container.hide()
+            self.mode_2d_btn.setEnabled(False)
+            if self.canvas.load_texture(temp_path):
+                self._on_image_loaded(temp_path)
+                msg = "Image generated and loaded into the viewport."
+                if revised:
+                    msg += f"<br><br><i>Revised prompt: {revised[:200]}</i>"
+                self._ai_append_chat("assistant", msg)
+            else:
+                self._ai_append_chat("assistant", "Failed to load the generated image.")
+        except Exception as e:
+            self._ai_append_chat("assistant", f"Image generation error: {str(e)[:150]}")
+
+    def _ai_add_shader_to_list(self):
+        """Add the shader from the AI code editor to the Shader dropdown."""
+        code = self.ai_code_editor.toPlainText().strip()
+        if not code:
+            self._ai_append_chat("assistant", "No shader code in the editor.")
+            return
+
+        name = self.ai_shader_name_edit.text().strip()
+        if not name:
+            self._ai_generated_shader_count += 1
+            name = f"AI Shader {self._ai_generated_shader_count}"
+
+        # Auto-detect uniforms from code
+        uniforms = {}
+        for line in code.split('\n'):
+            s = line.strip()
+            if s.startswith('uniform float') and 'u_texture' not in s \
+                    and 'u_resolution' not in s:
+                parts = s.split()
+                if len(parts) >= 3:
+                    pname = parts[2].rstrip(';')
+                    if pname not in ('u_time', 'u_mouse'):
+                        uniforms[pname] = {
+                            "min": 0.0, "max": 1.0, "default": 0.5, "step": 0.01,
+                        }
+
+        # Try to extract uniform ranges from AI response JSON
+        import re as _re
+        import json as _json
+        for msg in reversed(self._ai_chat_history):
+            if msg["role"] == "assistant":
+                match = _re.search(
+                    r'\{"uniforms"\s*:\s*\{.*?\}\}', msg["content"], _re.DOTALL
+                )
+                if match:
+                    try:
+                        parsed = _json.loads(match.group())
+                        if "uniforms" in parsed:
+                            for uname, uprops in parsed["uniforms"].items():
+                                if uname in uniforms:
+                                    uniforms[uname].update(uprops)
+                                    uniforms[uname].setdefault("step", 0.01)
+                    except (_json.JSONDecodeError, KeyError):
+                        pass
+                    break
+
+        shader_entry = {
+            "category": "AI Generated",
+            "description": f"AI-generated shader: {name}",
+            "uniforms": uniforms,
+            "frag": code,
+        }
+
+        SHADERS[name] = shader_entry
+        self.custom_shaders[name] = shader_entry
+
+        # Refresh shader combo and select the new shader
+        self._filter_shaders("All")
+        idx = self.shader_combo.findText(name)
+        if idx >= 0:
+            self.shader_combo.setCurrentIndex(idx)
+
+        self._ai_append_chat("assistant",
+            f"Shader '{name}' added to shader list "
+            f"with {len(uniforms)} parameter(s).")
+        self.statusBar().showMessage(f"AI Shader '{name}' added", 3000)
+
+    def _ai_apply_shader(self):
+        """Preview the shader from the editor without adding it permanently."""
+        code = self.ai_code_editor.toPlainText().strip()
+        if not code:
+            self._ai_append_chat("assistant", "No shader code in the editor.")
+            return
+
+        temp_name = "__ai_preview__"
+
+        # Auto-detect uniforms
+        uniforms = {}
+        for line in code.split('\n'):
+            s = line.strip()
+            if s.startswith('uniform float') and 'u_texture' not in s \
+                    and 'u_resolution' not in s:
+                parts = s.split()
+                if len(parts) >= 3:
+                    pname = parts[2].rstrip(';')
+                    if pname not in ('u_time', 'u_mouse'):
+                        uniforms[pname] = {
+                            "min": 0.0, "max": 1.0, "default": 0.5, "step": 0.01,
+                        }
+
+        SHADERS[temp_name] = {
+            "category": "AI Generated",
+            "description": "AI preview shader (temporary)",
+            "uniforms": uniforms,
+            "frag": code,
+        }
+
+        try:
+            self.canvas.set_preset(temp_name)
+            self._update_params_ui(temp_name)
+            self._ai_append_chat("assistant",
+                "Shader applied (preview). Use 'Add to Shaders' to save it permanently.")
+        except Exception as e:
+            self._ai_append_chat("assistant", f"Shader error: {str(e)[:100]}")
+            SHADERS.pop(temp_name, None)
+
+    def _ai_validate_shader(self):
+        """Validate the GLSL code in the AI editor."""
+        code = self.ai_code_editor.toPlainText()
+        if not code.strip():
+            self._ai_append_chat("assistant", "Editor is empty — nothing to validate.")
+            return
+
+        errors = []
+        if "#version" not in code:
+            errors.append("Missing #version directive")
+        if "void main()" not in code and "void main ()" not in code:
+            errors.append("Missing main() function")
+        if "f_color" not in code:
+            errors.append("Missing f_color output variable")
+        if "u_texture" not in code:
+            errors.append("Missing u_texture sampler uniform")
+        if "v_uv" not in code:
+            errors.append("Missing v_uv input varying")
+
+        if errors:
+            self._ai_append_chat("assistant",
+                "Validation issues:<br>- " + "<br>- ".join(errors))
+        else:
+            self._ai_append_chat("assistant", "Shader code looks valid.")
+
+    def _ai_clear_editor(self):
+        """Clear the AI shader editor and name field."""
+        self.ai_code_editor.clear()
+        self.ai_shader_name_edit.clear()
+
+    def eventFilter(self, obj, event):
+        """Handle Enter to send, Shift+Enter for new line in AI chat input."""
+        if obj is self.ai_chat_input and event.type() == event.Type.KeyPress:
+            from PyQt6.QtCore import Qt
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                    return False  # Let Shift+Enter insert a new line normally
+                self._ai_chat_send()
+                return True  # Block plain Enter from inserting a new line
+        return super().eventFilter(obj, event)
+
+    def _open_ai_model_dialog(self):
+        """Open the Manage AI Models dialog."""
+        dialog = AIModelDialog(self)
+        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            global CUSTOM_AI_MODELS, AI_MODELS
+            CUSTOM_AI_MODELS = dialog.get_models()
+            save_custom_models()
+            # Rebuild AI_MODELS: start from built-ins, then merge custom
+            builtin_keys = {
+                "Local (Built-in)", "GPT-4 Vision", "GPT-3.5 Turbo",
+                "Claude 3 Opus", "Claude 3 Sonnet", "Gemini Pro",
+            }
+            # Remove old custom entries
+            for key in list(AI_MODELS.keys()):
+                if key not in builtin_keys:
+                    del AI_MODELS[key]
+            # Add current custom entries
+            AI_MODELS.update(CUSTOM_AI_MODELS)
+            self._refresh_ai_model_combo()
+
+    def _refresh_ai_model_combo(self):
+        """Refresh the AI model dropdown with current AI_MODELS."""
+        current = self.ai_model_combo.currentText()
+        self.ai_model_combo.blockSignals(True)
+        self.ai_model_combo.clear()
+        self.ai_model_combo.addItem("Select AI Model")
+        self.ai_model_combo.addItems(sorted(AI_MODELS.keys()))
+        # Restore selection if still exists
+        idx = self.ai_model_combo.findText(current)
+        if idx >= 0:
+            self.ai_model_combo.setCurrentIndex(idx)
+        self.ai_model_combo.blockSignals(False)
 
     def _update_params_ui(self, shader_name):
         # Clear existing
@@ -14022,7 +21619,16 @@ Only respond with valid JSON, no other text. Example:
         self._update_undo_buttons()
 
     def _undo(self):
-        """Undo the last parameter change."""
+        """Undo the last parameter change, or paint undo if paint surface is active."""
+        # 3D paint undo
+        if self.canvas.mode_3d and self.canvas._3d_paint_texture is not None:
+            self.canvas.paint_undo_3d()
+            return
+        # If paint surface is active, dispatch to paint undo
+        if self.canvas._paint_surface is not None:
+            self.canvas.paint_undo()
+            return
+
         if not self.canvas.undo_stack:
             return
 
@@ -14044,7 +21650,16 @@ Only respond with valid JSON, no other text. Example:
         self._update_undo_buttons()
 
     def _redo(self):
-        """Redo the last undone parameter change."""
+        """Redo the last undone parameter change, or paint redo if paint surface is active."""
+        # 3D paint redo
+        if self.canvas.mode_3d and self.canvas._3d_paint_texture is not None:
+            self.canvas.paint_redo_3d()
+            return
+        # If paint surface is active, dispatch to paint redo
+        if self.canvas._paint_surface is not None:
+            self.canvas.paint_redo()
+            return
+
         if not self.canvas.redo_stack:
             return
 
@@ -14067,8 +21682,10 @@ Only respond with valid JSON, no other text. Example:
 
     def _update_undo_buttons(self):
         """Update the enabled state of undo/redo buttons."""
-        self.undo_btn.setEnabled(len(self.canvas.undo_stack) > 0)
-        self.redo_btn.setEnabled(len(self.canvas.redo_stack) > 0)
+        has_undo = len(self.canvas.undo_stack) > 0 or len(self.canvas._paint_undo_stack) > 0
+        has_redo = len(self.canvas.redo_stack) > 0 or len(self.canvas._paint_redo_stack) > 0
+        self.undo_btn.setEnabled(has_undo)
+        self.redo_btn.setEnabled(has_redo)
 
     def _reset_params(self):
         shader_def = SHADERS.get(self.canvas.current_preset, {})
@@ -14082,6 +21699,608 @@ Only respond with valid JSON, no other text. Example:
         # Clear cache for this shader
         if self.canvas.current_preset in self.current_params_cache:
             del self.current_params_cache[self.canvas.current_preset]
+
+    # --- Textures Tab Handlers ---
+
+    def _make_tex_slider(self, label, min_val, max_val, default, step, parent_layout):
+        """Create a labeled slider row for the Textures tab. Returns (slider, value_label)."""
+        row = QtWidgets.QHBoxLayout()
+        row.setSpacing(4)
+        lbl = QtWidgets.QLabel(f"{label}:")
+        lbl.setStyleSheet("font-size: 10px; color: #ccc;")
+        lbl.setFixedWidth(52)
+        slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        steps = int((max_val - min_val) / step)
+        slider.setRange(0, steps)
+        slider.setValue(int((default - min_val) / step))
+        val_lbl = QtWidgets.QLabel(f"{default:.2f}")
+        val_lbl.setStyleSheet("font-size: 10px; color: #aaa;")
+        val_lbl.setFixedWidth(36)
+
+        def on_change(v):
+            val = min_val + v * step
+            val_lbl.setText(f"{val:.2f}")
+        slider.valueChanged.connect(on_change)
+        row.addWidget(lbl)
+        row.addWidget(slider, 1)
+        row.addWidget(val_lbl)
+        parent_layout.addLayout(row)
+        return slider, val_lbl, min_val, step
+
+    def _get_tex_slider_value(self, slider_tuple):
+        """Get the float value from a texture slider tuple (slider, label, min_val, step)."""
+        slider, _, min_val, step = slider_tuple
+        return min_val + slider.value() * step
+
+    def _on_tex_type_changed(self, idx):
+        """Rebuild parameter sliders when texture type changes."""
+        tex_name = self._tex_type_combo.currentText()
+        tex_def = PROCEDURAL_TEXTURES.get(tex_name, {})
+
+        # Update description
+        self._tex_description.setText(tex_def.get("description", ""))
+
+        # Clear old param sliders
+        while self._tex_params_layout.count():
+            item = self._tex_params_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+            elif item.layout():
+                # Clear sub-layout
+                sub = item.layout()
+                while sub.count():
+                    sub_item = sub.takeAt(0)
+                    if sub_item.widget():
+                        sub_item.widget().deleteLater()
+        self._tex_param_sliders.clear()
+
+        # Create new sliders from params
+        params = tex_def.get("params", {})
+        for pname, pdef in params.items():
+            row = QtWidgets.QHBoxLayout()
+            row.setSpacing(4)
+            display_name = pname.replace("_", " ").title()
+            lbl = QtWidgets.QLabel(f"{display_name}:")
+            lbl.setStyleSheet("font-size: 10px; color: #ccc;")
+            lbl.setFixedWidth(72)
+            slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+            mn, mx = pdef["min"], pdef["max"]
+            step = pdef.get("step", 0.01)
+            steps = max(1, int((mx - mn) / step))
+            slider.setRange(0, steps)
+            default = pdef.get("default", mn)
+            slider.setValue(int((default - mn) / step))
+            val_lbl = QtWidgets.QLabel(f"{default:.2f}")
+            val_lbl.setStyleSheet("font-size: 10px; color: #aaa;")
+            val_lbl.setFixedWidth(36)
+
+            def make_cb(s, vl, mn_=mn, step_=step):
+                def cb(v):
+                    val = mn_ + v * step_
+                    vl.setText(f"{val:.2f}")
+                    self._tex_preview_timer.start()
+                return cb
+            slider.valueChanged.connect(make_cb(slider, val_lbl))
+            row.addWidget(lbl)
+            row.addWidget(slider, 1)
+            row.addWidget(val_lbl)
+            self._tex_params_layout.addLayout(row)
+            self._tex_param_sliders[pname] = (slider, val_lbl, mn, step)
+
+        # Auto-generate preview for new type
+        self._on_tex_generate_preview()
+
+    def _get_tex_params(self):
+        """Collect current texture parameter values from sliders."""
+        params = {}
+        for pname, (slider, _, mn, step) in self._tex_param_sliders.items():
+            params[pname] = mn + slider.value() * step
+        return params
+
+    def _on_tex_generate_preview(self):
+        """Generate a 128x128 preview of the current procedural texture."""
+        tex_name = self._tex_type_combo.currentText()
+        params = self._get_tex_params()
+        data = self.canvas._generate_procedural_texture(tex_name, params, 128, 128)
+        # Convert to QPixmap and display
+        from PyQt6.QtGui import QImage, QPixmap
+        h, w = data.shape[:2]
+        img = QImage(data.data, w, h, w * 4, QImage.Format.Format_RGBA8888)
+        pixmap = QPixmap.fromImage(img)
+        self._tex_preview_label.setPixmap(pixmap.scaled(128, 128, QtCore.Qt.AspectRatioMode.KeepAspectRatio))
+
+    def _on_tex_apply(self):
+        """Generate procedural texture at full resolution and apply to selected material."""
+        if not self.canvas.mode_3d:
+            QtWidgets.QMessageBox.information(self, "Textures", "Load a 3D model first to apply textures.")
+            return
+        tex_name = self._tex_type_combo.currentText()
+        params = self._get_tex_params()
+        res = int(self._tex_resolution_combo.currentText())
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
+        try:
+            data = self.canvas._generate_procedural_texture(tex_name, params, res, res)
+            # Apply transform
+            tiling_u = self._get_tex_slider_value(self._tex_tiling_u)
+            tiling_v = self._get_tex_slider_value(self._tex_tiling_v)
+            offset_u = self._get_tex_slider_value(self._tex_offset_u)
+            offset_v = self._get_tex_slider_value(self._tex_offset_v)
+            if tiling_u != 1.0 or tiling_v != 1.0 or offset_u != 0.0 or offset_v != 0.0:
+                data = self.canvas._apply_texture_transform(data, tiling_u, tiling_v, offset_u, offset_v)
+            mat_idx = self._tex_material_combo.currentIndex()
+            self.canvas.apply_texture_to_material(mat_idx, data)
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+
+    def _on_tex_browse(self):
+        """Open file dialog to select a custom texture image."""
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Select Texture Image", "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.tga *.tiff);;All Files (*)")
+        if path:
+            try:
+                from PIL import Image
+                img = Image.open(path).convert("RGBA")
+                self._tex_custom_image_data = np.array(img)
+                self._tex_custom_path_label.setText(os.path.basename(path))
+            except Exception as e:
+                QtWidgets.QMessageBox.warning(self, "Error", f"Failed to load image:\n{e}")
+
+    def _on_tex_apply_custom(self):
+        """Apply the loaded custom texture image to the selected material."""
+        if not self.canvas.mode_3d:
+            QtWidgets.QMessageBox.information(self, "Textures", "Load a 3D model first to apply textures.")
+            return
+        if self._tex_custom_image_data is None:
+            QtWidgets.QMessageBox.information(self, "Textures", "Browse for an image first.")
+            return
+        data = self._tex_custom_image_data.copy()
+        tiling_u = self._get_tex_slider_value(self._tex_tiling_u)
+        tiling_v = self._get_tex_slider_value(self._tex_tiling_v)
+        offset_u = self._get_tex_slider_value(self._tex_offset_u)
+        offset_v = self._get_tex_slider_value(self._tex_offset_v)
+        if tiling_u != 1.0 or tiling_v != 1.0 or offset_u != 0.0 or offset_v != 0.0:
+            data = self.canvas._apply_texture_transform(data, tiling_u, tiling_v, offset_u, offset_v)
+        mat_idx = self._tex_material_combo.currentIndex()
+        self.canvas.apply_texture_to_material(mat_idx, data)
+
+    def _on_tex_reset(self):
+        """Reset selected material to its original texture."""
+        if not self.canvas.mode_3d:
+            return
+        mat_idx = self._tex_material_combo.currentIndex()
+        self.canvas.reset_material_texture(mat_idx)
+
+    def _refresh_tex_material_combo(self):
+        """Populate the texture material combo from the canvas materials."""
+        self._tex_material_combo.clear()
+        if self.canvas._gltf_materials:
+            for i, mat in enumerate(self.canvas._gltf_materials):
+                name = mat.get("name", f"Material {i}")
+                self._tex_material_combo.addItem(f"{i}: {name}")
+        elif self.canvas.mode_3d:
+            self._tex_material_combo.addItem("0: Default Material")
+
+    # --- Lighting Controls ---
+
+    def _rebuild_lighting_ui(self):
+        """Rebuild the entire lighting UI from current canvas.lights state."""
+        layout = self._light_controls_layout
+        # Clear existing widgets
+        while layout.count():
+            child = layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+            elif child.layout():
+                while child.layout().count():
+                    sub = child.layout().takeAt(0)
+                    if sub.widget():
+                        sub.widget().deleteLater()
+
+        self._light_sliders = []
+        slider_style = "font-size: 10px; padding: 0px;"
+        label_style = "color: #aaa; font-size: 10px; min-width: 14px;"
+        val_style = "color: #aaa; font-size: 10px; min-width: 28px;"
+        tile_style = (
+            "QFrame { border: 1px solid #555; border-radius: 4px;"
+            " background-color: #2e2e2e; }"
+        )
+        pos_range = max(300, int(getattr(self.canvas, '_model_extent', 2.0) * 40))
+
+        # --- Flow layout container for per-light tiles ---
+        tiles_widget = QtWidgets.QWidget()
+        tiles_flow = FlowLayout(tiles_widget, margin=0, h_spacing=4, v_spacing=4)
+        layout.addWidget(tiles_widget)
+
+        for li in range(len(self.canvas.lights)):
+            light = self.canvas.lights[li]
+            light_data = {}
+
+            # --- Tile frame ---
+            tile = QtWidgets.QFrame()
+            tile.setFrameShape(QtWidgets.QFrame.Shape.Box)
+            tile.setStyleSheet(tile_style)
+            tile.setFixedWidth(155)
+            tile_lay = QtWidgets.QVBoxLayout(tile)
+            tile_lay.setContentsMargins(4, 4, 4, 4)
+            tile_lay.setSpacing(2)
+
+            # Header row: label + color btn + delete btn
+            hdr_row = QtWidgets.QHBoxLayout()
+            hdr_row.setContentsMargins(0, 0, 0, 0)
+            hdr_row.setSpacing(3)
+            header = QtWidgets.QLabel(f"Light {li+1}")
+            header.setStyleSheet("color: #ccc; font-size: 10px; font-weight: bold;")
+            hdr_row.addWidget(header)
+            hdr_row.addStretch()
+
+            color_btn = QtWidgets.QPushButton("")
+            color_btn.setFixedSize(18, 18)
+            c = light["color"]
+            cr, cg, cb = int(c[0]*255), int(c[1]*255), int(c[2]*255)
+            color_btn.setStyleSheet(
+                f"background-color: rgb({cr},{cg},{cb}); border: 1px solid #888;"
+                f" border-radius: 2px;"
+            )
+            color_btn.setToolTip("Light color")
+            color_btn.clicked.connect(lambda checked, i=li: self._pick_light_color(i))
+            hdr_row.addWidget(color_btn)
+            light_data["color_btn"] = color_btn
+
+            del_btn = QtWidgets.QPushButton("\u2716")
+            del_btn.setFixedSize(16, 16)
+            del_btn.setStyleSheet(
+                "font-size: 9px; padding: 0px; background-color: #5a2d2d; color: #ddd;"
+                " border-radius: 2px;"
+            )
+            del_btn.setToolTip("Remove this light")
+            del_btn.clicked.connect(lambda checked, i=li: self._remove_light(i))
+            hdr_row.addWidget(del_btn)
+            tile_lay.addLayout(hdr_row)
+
+            # --- Helper to add a labeled slider row inside the tile ---
+            def _add_slider_row(parent_layout, lbl_text, sl_min, sl_max, sl_val,
+                                val_text, connect_fn, data_key, data_lbl_key,
+                                _light_data=light_data):
+                row = QtWidgets.QHBoxLayout()
+                row.setContentsMargins(0, 0, 0, 0)
+                row.setSpacing(2)
+                lbl = QtWidgets.QLabel(lbl_text)
+                lbl.setStyleSheet(label_style)
+                row.addWidget(lbl)
+                sl = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+                sl.setRange(sl_min, sl_max)
+                sl.setValue(sl_val)
+                sl.setStyleSheet(slider_style)
+                row.addWidget(sl)
+                vl = QtWidgets.QLabel(val_text)
+                vl.setStyleSheet(val_style)
+                row.addWidget(vl)
+                parent_layout.addLayout(row)
+                _light_data[data_key] = sl
+                _light_data[data_lbl_key] = vl
+                sl.valueChanged.connect(connect_fn)
+                return sl
+
+            # X / Y / Z position sliders (stacked)
+            for ai, axis in enumerate(["x", "y", "z"]):
+                _add_slider_row(
+                    tile_lay, axis.upper(), -pos_range, pos_range,
+                    int(light["pos"][ai] * 10),
+                    f"{light['pos'][ai]:.1f}",
+                    lambda v, i=li, a=axis: self._on_light_pos_changed(i, a, v),
+                    axis, f"{axis}_lbl",
+                )
+
+            # Pitch / Yaw (derived from XYZ)
+            pos = light["pos"]
+            _dist = math.sqrt(pos[0]**2 + pos[1]**2 + pos[2]**2)
+            if _dist > 0.001:
+                _pitch_deg = math.degrees(math.asin(max(-1.0, min(1.0, pos[1] / _dist))))
+                _yaw_deg = math.degrees(math.atan2(pos[0], pos[2]))
+            else:
+                _pitch_deg = 0.0
+                _yaw_deg = 0.0
+
+            _add_slider_row(
+                tile_lay, "Pitch", -90, 90,
+                int(round(_pitch_deg)),
+                f"{int(round(_pitch_deg))}\u00b0",
+                lambda v, i=li: self._on_light_pitch_yaw_changed(i, "pitch", v),
+                "pitch", "pitch_lbl",
+            )
+            _add_slider_row(
+                tile_lay, "Yaw", -180, 180,
+                int(round(_yaw_deg)),
+                f"{int(round(_yaw_deg))}\u00b0",
+                lambda v, i=li: self._on_light_pitch_yaw_changed(i, "yaw", v),
+                "yaw", "yaw_lbl",
+            )
+
+            # Intensity slider
+            _add_slider_row(
+                tile_lay, "Int", 0, 200,
+                int(light["intensity"] * 20),
+                f"{light['intensity']:.2f}",
+                lambda v, i=li: self._on_light_intensity_changed(i, v),
+                "intensity", "intensity_lbl",
+            )
+
+            self._light_sliders.append(light_data)
+            tiles_flow.addWidget(tile)
+
+        # Add Light button
+        add_btn = QtWidgets.QPushButton("+ Add Light")
+        add_btn.setStyleSheet("font-size: 11px; padding: 2px 4px; background-color: #2d5a2d;")
+        add_btn.clicked.connect(self._add_light)
+        layout.addWidget(add_btn)
+
+        # Global separator
+        gsep = QtWidgets.QFrame()
+        gsep.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+        gsep.setStyleSheet("background-color: #555;")
+        layout.addWidget(gsep)
+
+        # Ambient
+        amb_w = QtWidgets.QWidget()
+        amb_row = QtWidgets.QHBoxLayout(amb_w)
+        amb_row.setContentsMargins(0, 0, 0, 0)
+        amb_row.setSpacing(2)
+        amb_lbl = QtWidgets.QLabel("Ambient")
+        amb_lbl.setStyleSheet(label_style)
+        amb_row.addWidget(amb_lbl)
+        self._ambient_sl = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._ambient_sl.setRange(0, 300)
+        self._ambient_sl.setValue(int(self.canvas.ambient_intensity * 100))
+        self._ambient_sl.setStyleSheet(slider_style)
+        amb_row.addWidget(self._ambient_sl)
+        self._ambient_val = QtWidgets.QLabel(f"{self.canvas.ambient_intensity:.2f}")
+        self._ambient_val.setStyleSheet(val_style)
+        amb_row.addWidget(self._ambient_val)
+        layout.addWidget(amb_w)
+        self._ambient_sl.valueChanged.connect(self._on_ambient_changed)
+
+        # Specular Power
+        sp_w = QtWidgets.QWidget()
+        sp_row = QtWidgets.QHBoxLayout(sp_w)
+        sp_row.setContentsMargins(0, 0, 0, 0)
+        sp_row.setSpacing(2)
+        sp_lbl = QtWidgets.QLabel("Spec Pwr")
+        sp_lbl.setStyleSheet(label_style)
+        sp_row.addWidget(sp_lbl)
+        self._spec_power_sl = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._spec_power_sl.setRange(1, 512)
+        self._spec_power_sl.setValue(int(self.canvas.specular_power))
+        self._spec_power_sl.setStyleSheet(slider_style)
+        sp_row.addWidget(self._spec_power_sl)
+        self._spec_power_val = QtWidgets.QLabel(f"{self.canvas.specular_power:.0f}")
+        self._spec_power_val.setStyleSheet(val_style)
+        sp_row.addWidget(self._spec_power_val)
+        layout.addWidget(sp_w)
+        self._spec_power_sl.valueChanged.connect(self._on_spec_power_changed)
+
+        # Specular Intensity
+        si_w = QtWidgets.QWidget()
+        si_row = QtWidgets.QHBoxLayout(si_w)
+        si_row.setContentsMargins(0, 0, 0, 0)
+        si_row.setSpacing(2)
+        si_lbl = QtWidgets.QLabel("Spec Int")
+        si_lbl.setStyleSheet(label_style)
+        si_row.addWidget(si_lbl)
+        self._spec_int_sl = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._spec_int_sl.setRange(0, 200)
+        self._spec_int_sl.setValue(int(self.canvas.specular_intensity * 20))
+        self._spec_int_sl.setStyleSheet(slider_style)
+        si_row.addWidget(self._spec_int_sl)
+        self._spec_int_val = QtWidgets.QLabel(f"{self.canvas.specular_intensity:.2f}")
+        self._spec_int_val.setStyleSheet(val_style)
+        si_row.addWidget(self._spec_int_val)
+        layout.addWidget(si_w)
+        self._spec_int_sl.valueChanged.connect(self._on_spec_int_changed)
+
+        # Reset Lighting button
+        reset_btn = QtWidgets.QPushButton("Reset Lighting")
+        reset_btn.setStyleSheet("font-size: 11px; padding: 2px 4px; background-color: #5a2d2d;")
+        reset_btn.clicked.connect(self._reset_lighting)
+        layout.addWidget(reset_btn)
+
+    def _on_light_pos_changed(self, light_idx, axis, value):
+        """Handle light position slider change and sync pitch/yaw."""
+        fval = value / 10.0
+        axis_map = {"x": 0, "y": 1, "z": 2}
+        self.canvas.lights[light_idx]["pos"][axis_map[axis]] = fval
+        self._light_sliders[light_idx][f"{axis}_lbl"].setText(f"{fval:.1f}")
+        # Sync pitch/yaw sliders from updated XYZ
+        ld = self._light_sliders[light_idx]
+        if "pitch" in ld and "yaw" in ld:
+            pos = self.canvas.lights[light_idx]["pos"]
+            dist = math.sqrt(pos[0]**2 + pos[1]**2 + pos[2]**2)
+            if dist > 0.001:
+                p_deg = math.degrees(math.asin(max(-1.0, min(1.0, pos[1] / dist))))
+                y_deg = math.degrees(math.atan2(pos[0], pos[2]))
+            else:
+                p_deg = 0.0
+                y_deg = 0.0
+            ld["pitch"].blockSignals(True)
+            ld["pitch"].setValue(int(round(p_deg)))
+            ld["pitch"].blockSignals(False)
+            ld["pitch_lbl"].setText(f"{int(round(p_deg))}\u00b0")
+            ld["yaw"].blockSignals(True)
+            ld["yaw"].setValue(int(round(y_deg)))
+            ld["yaw"].blockSignals(False)
+            ld["yaw_lbl"].setText(f"{int(round(y_deg))}\u00b0")
+        self.canvas.update()
+
+    def _on_light_pitch_yaw_changed(self, light_idx, which, value):
+        """Handle light pitch/yaw slider change — update XYZ from spherical coords."""
+        ld = self._light_sliders[light_idx]
+        pos = self.canvas.lights[light_idx]["pos"]
+        dist = math.sqrt(pos[0]**2 + pos[1]**2 + pos[2]**2)
+        if dist < 0.001:
+            dist = 1.0  # fallback distance
+
+        # Get current pitch/yaw from sliders (degrees)
+        pitch_deg = float(ld["pitch"].value())
+        yaw_deg = float(ld["yaw"].value())
+
+        # Update label for the changed slider
+        ld[f"{which}_lbl"].setText(f"{value}\u00b0")
+
+        # Convert spherical to cartesian (keeping distance constant)
+        pitch_rad = math.radians(pitch_deg)
+        yaw_rad = math.radians(yaw_deg)
+        new_x = dist * math.cos(pitch_rad) * math.sin(yaw_rad)
+        new_y = dist * math.sin(pitch_rad)
+        new_z = dist * math.cos(pitch_rad) * math.cos(yaw_rad)
+
+        # Update light position
+        pos[0] = new_x
+        pos[1] = new_y
+        pos[2] = new_z
+
+        # Sync XYZ sliders (block signals to avoid recursive updates)
+        for axis, new_val in [("x", new_x), ("y", new_y), ("z", new_z)]:
+            ld[axis].blockSignals(True)
+            ld[axis].setValue(int(round(new_val * 10)))
+            ld[axis].blockSignals(False)
+            ld[f"{axis}_lbl"].setText(f"{new_val:.1f}")
+
+        self.canvas.update()
+
+    def _on_light_intensity_changed(self, light_idx, value):
+        """Handle light intensity slider change."""
+        fval = value / 20.0
+        self.canvas.lights[light_idx]["intensity"] = fval
+        self._light_sliders[light_idx]["intensity_lbl"].setText(f"{fval:.2f}")
+        self.canvas.update()
+
+    def _on_ambient_changed(self, value):
+        self.canvas.ambient_intensity = value / 100.0
+        self._ambient_val.setText(f"{value / 100.0:.2f}")
+        self.canvas.update()
+
+    def _on_spec_power_changed(self, value):
+        self.canvas.specular_power = float(value)
+        self._spec_power_val.setText(f"{value:.0f}")
+        self.canvas.update()
+
+    def _on_spec_int_changed(self, value):
+        self.canvas.specular_intensity = value / 20.0
+        self._spec_int_val.setText(f"{value / 20.0:.2f}")
+        self.canvas.update()
+
+    def _pick_light_color(self, light_idx):
+        """Open color dialog for a light."""
+        c = self.canvas.lights[light_idx]["color"]
+        initial = QtGui.QColor(int(c[0]*255), int(c[1]*255), int(c[2]*255))
+        color = QtWidgets.QColorDialog.getColor(initial, self, f"Light {light_idx+1} Color")
+        if color.isValid():
+            r, g, b = color.redF(), color.greenF(), color.blueF()
+            self.canvas.lights[light_idx]["color"] = [r, g, b]
+            btn = self._light_sliders[light_idx]["color_btn"]
+            btn.setStyleSheet(
+                f"background-color: rgb({color.red()},{color.green()},{color.blue()}); "
+                f"border: 2px solid #888;"
+            )
+            self.canvas.update()
+
+    def _add_light(self):
+        """Add a new light to the scene."""
+        extent = getattr(self.canvas, '_model_extent', 2.0)
+        s = max(1.0, extent * 0.8)
+        self.canvas.lights.append({"pos": [s, s, s], "color": [1.0, 1.0, 1.0], "intensity": 1.0})
+        self.canvas._compile_shader_3d()
+        self._rebuild_lighting_ui()
+        self.canvas.update()
+
+    def _remove_light(self, index):
+        """Remove a light from the scene."""
+        if len(self.canvas.lights) <= 1:
+            return
+        self.canvas.lights.pop(index)
+        self.canvas._compile_shader_3d()
+        self._rebuild_lighting_ui()
+        self.canvas.update()
+
+    def _reset_lighting(self):
+        """Reset all lights to model-scaled defaults."""
+        self.canvas.lights = self.canvas._get_default_lights()
+        self.canvas.ambient_intensity = 0.2
+        self.canvas.specular_power = 32.0
+        self.canvas.specular_intensity = 0.5
+        self.canvas._compile_shader_3d()
+        self._rebuild_lighting_ui()
+        self.canvas.update()
+
+    def _sync_lighting_ui(self):
+        """Rebuild lighting UI to sync with current canvas state."""
+        self._rebuild_lighting_ui()
+
+    # --- Lighting Presets ---
+
+    def _refresh_lighting_preset_combo(self):
+        """Refresh lighting preset dropdown with builtins and user presets."""
+        self._lighting_preset_combo.blockSignals(True)
+        self._lighting_preset_combo.clear()
+        self._lighting_preset_combo.addItem("Apply Preset...")
+        # Built-in presets
+        for name in BUILTIN_LIGHTING_PRESETS:
+            self._lighting_preset_combo.addItem(f"[B] {name}")
+        # User presets
+        user_presets = CAM_LIGHT_DATA.get("lighting_presets", {})
+        if user_presets:
+            self._lighting_preset_combo.addItem("\u2500\u2500\u2500 Custom \u2500\u2500\u2500")
+            idx = self._lighting_preset_combo.count() - 1
+            model = self._lighting_preset_combo.model()
+            model.item(idx).setEnabled(False)
+            for name in sorted(user_presets.keys()):
+                self._lighting_preset_combo.addItem(name)
+        self._lighting_preset_combo.blockSignals(False)
+
+    def _apply_lighting_preset(self, text):
+        """Apply a lighting preset from the dropdown."""
+        if not text or text == "Apply Preset..." or text.startswith("\u2500"):
+            return
+        if text.startswith("[B] "):
+            name = text[4:]
+            state = BUILTIN_LIGHTING_PRESETS.get(name)
+        else:
+            state = CAM_LIGHT_DATA.get("lighting_presets", {}).get(text)
+        if state:
+            self.canvas.set_lighting_state(state)
+            self._rebuild_lighting_ui()
+        # Reset combo to placeholder
+        self._lighting_preset_combo.blockSignals(True)
+        self._lighting_preset_combo.setCurrentIndex(0)
+        self._lighting_preset_combo.blockSignals(False)
+
+    def _save_lighting_preset(self):
+        """Save current lighting as a named preset."""
+        name, ok = QtWidgets.QInputDialog.getText(self, "Save Lighting Preset", "Preset name:")
+        if ok and name and name.strip():
+            name = name.strip()
+            if name in BUILTIN_LIGHTING_PRESETS:
+                QtWidgets.QMessageBox.warning(self, "Reserved Name",
+                                               f"'{name}' is a built-in preset name. Choose another.")
+                return
+            CAM_LIGHT_DATA.setdefault("lighting_presets", {})[name] = self.canvas.get_lighting_state()
+            save_cam_light_data()
+            self._refresh_lighting_preset_combo()
+
+    def _delete_lighting_preset(self):
+        """Delete the selected user lighting preset."""
+        text = self._lighting_preset_combo.currentText()
+        if not text or text == "Apply Preset..." or text.startswith("[B]") or text.startswith("\u2500"):
+            return
+        if text in CAM_LIGHT_DATA.get("lighting_presets", {}):
+            reply = QtWidgets.QMessageBox.question(
+                self, "Delete Lighting Preset",
+                f"Delete lighting preset '{text}'?",
+                QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No)
+            if reply == QtWidgets.QMessageBox.StandardButton.Yes:
+                del CAM_LIGHT_DATA["lighting_presets"][text]
+                save_cam_light_data()
+                self._refresh_lighting_preset_combo()
 
     # --- Bake Pass ---
 
@@ -14106,12 +22325,16 @@ Only respond with valid JSON, no other text. Example:
         self._update_histogram()
 
     def _reset_chain(self):
-        """Reset to the original image and clear the bake chain."""
-        if not self.canvas._bake_chain:
-            return
+        """Reset to the original image, clear the bake chain and layers (except Background)."""
         self.canvas.reset_chain()
         self.chain_display_label.setText("No chain")
         self._refresh_chain_list()
+        # Clear layers except Background
+        if self.canvas._layers:
+            bg = self.canvas._layers[0]
+            self.canvas._layers.clear()
+            self.canvas._layers.append(bg)
+        self._refresh_layer_list()
         # Reset shader combo to Original
         idx = self.shader_combo.findText("Original")
         if idx >= 0:
@@ -14227,9 +22450,9 @@ Only respond with valid JSON, no other text. Example:
     def _exit_edit_mode(self):
         """Exit adjustment layer edit mode and restore UI."""
         self._editing_chain_index = None
-        self.bake_pass_btn.setText("Bake")
+        self.bake_pass_btn.setText("Add Layer")
         self.bake_pass_btn.setStyleSheet("background-color: #5a4a2d; font-size: 11px; padding: 2px 4px;")
-        self.bake_pass_btn.setToolTip("Bake Pass — Commit the current shader effect and start a new pass on top")
+        self.bake_pass_btn.setToolTip("Add current shader as a new layer")
         self.reset_chain_btn.setEnabled(True)
         # Reset to Original
         idx = self.shader_combo.findText("Original")
@@ -14254,6 +22477,351 @@ Only respond with valid JSON, no other text. Example:
             self.canvas.reset_chain()
         self._refresh_chain_list()
         self._update_histogram()
+
+    # --- Layer System (UI) ---
+
+    def _add_layer(self):
+        """Add the current shader as a new compositing layer."""
+        if self.canvas.current_preset == "Original":
+            QtWidgets.QMessageBox.information(
+                self, "Add Layer",
+                "Select a shader other than 'Original' before adding a layer."
+            )
+            return
+        shader_name = self.canvas.current_preset
+        params = dict(self.canvas.params)
+        layer_name = f"{shader_name}"
+        # Check for duplicate names and add suffix
+        existing = [l['name'] for l in self.canvas._layers]
+        if layer_name in existing:
+            n = 2
+            while f"{layer_name} {n}" in existing:
+                n += 1
+            layer_name = f"{layer_name} {n}"
+        self.canvas.add_layer(layer_name, shader_name, params)
+        self._refresh_layer_list()
+        # Select the new layer (last one)
+        self.layer_list_widget.setCurrentRow(len(self.canvas._layers) - 1)
+        # Reset shader combo to Original
+        idx = self.shader_combo.findText("Original")
+        if idx >= 0:
+            self.shader_combo.setCurrentIndex(idx)
+        self._update_params_ui("Original")
+        self._update_histogram()
+
+    def _remove_layer(self):
+        """Remove the selected layer."""
+        row = self.layer_list_widget.currentRow()
+        if row < 0:
+            return
+        if row == 0:
+            QtWidgets.QMessageBox.information(
+                self, "Remove Layer",
+                "Cannot remove the Background layer."
+            )
+            return
+        self.canvas.remove_layer(row)
+        self._refresh_layer_list()
+        self._update_histogram()
+
+    def _move_layer_up(self):
+        """Move the selected layer up (toward the top of the stack)."""
+        row = self.layer_list_widget.currentRow()
+        if row <= 1:  # Can't move Background (0) or first layer above Background
+            return
+        self.canvas.move_layer(row, row - 1)
+        self._refresh_layer_list()
+        self.layer_list_widget.setCurrentRow(row - 1)
+        self._update_histogram()
+
+    def _move_layer_down(self):
+        """Move the selected layer down (toward the bottom of the stack)."""
+        row = self.layer_list_widget.currentRow()
+        if row <= 0 or row >= len(self.canvas._layers) - 1:
+            return
+        self.canvas.move_layer(row, row + 1)
+        self._refresh_layer_list()
+        self.layer_list_widget.setCurrentRow(row + 1)
+        self._update_histogram()
+
+    def _on_layer_selected(self, index):
+        """Update blend mode/opacity/clipping controls when a layer is selected."""
+        if index < 0 or index >= len(self.canvas._layers):
+            return
+        layer = self.canvas._layers[index]
+        # Update blend mode combo without triggering signal
+        self._layer_blend_combo.blockSignals(True)
+        blend_text = layer['blend_mode'].title()
+        idx = self._layer_blend_combo.findText(blend_text)
+        if idx >= 0:
+            self._layer_blend_combo.setCurrentIndex(idx)
+        self._layer_blend_combo.blockSignals(False)
+        # Update opacity slider without triggering signal
+        self._layer_opacity_slider.blockSignals(True)
+        self._layer_opacity_slider.setValue(int(layer['opacity'] * 100))
+        self._layer_opacity_slider.blockSignals(False)
+        self._layer_opacity_label.setText(f"{int(layer['opacity'] * 100)}%")
+        # Update clipping mask checkbox
+        self._layer_clipping_cb.blockSignals(True)
+        self._layer_clipping_cb.setChecked(layer.get('clipping', False))
+        self._layer_clipping_cb.blockSignals(False)
+        # Update paint mask checkbox
+        self._paint_mask_cb.blockSignals(True)
+        self._paint_mask_cb.setChecked(self.canvas._painting_mask)
+        self._paint_mask_cb.blockSignals(False)
+
+    def _on_layer_blend_changed(self, text):
+        """Handle blend mode change for the selected layer."""
+        row = self.layer_list_widget.currentRow()
+        if row < 0 or row >= len(self.canvas._layers):
+            return
+        mode = text.lower()
+        self.canvas.set_layer_prop(row, 'blend_mode', mode)
+        self._update_histogram()
+
+    def _on_layer_opacity_changed(self, value):
+        """Handle opacity slider change for the selected layer."""
+        row = self.layer_list_widget.currentRow()
+        if row < 0 or row >= len(self.canvas._layers):
+            return
+        self._layer_opacity_label.setText(f"{value}%")
+        self.canvas.set_layer_prop(row, 'opacity', value / 100.0)
+        self._update_histogram()
+
+    def _on_layer_clipping_changed(self, checked):
+        """Toggle clipping mask on the selected layer."""
+        row = self.layer_list_widget.currentRow()
+        if row < 0 or row >= len(self.canvas._layers):
+            return
+        self.canvas._layers[row]['clipping'] = checked
+        self.canvas._render_layers()
+        self._refresh_layer_list()
+
+    def _on_add_layer_mask(self):
+        """Add a white (fully visible) mask to the selected layer."""
+        row = self.layer_list_widget.currentRow()
+        if row < 0 or row >= len(self.canvas._layers):
+            return
+        layer = self.canvas._layers[row]
+        if layer.get('mask') is not None:
+            return  # Already has a mask
+        if self.canvas.image_size is None:
+            return
+        w, h = self.canvas.image_size
+        layer['mask'] = np.full((h, w), 255, dtype=np.uint8)
+        self.canvas._render_layers()
+        self._refresh_layer_list()
+
+    def _on_delete_layer_mask(self):
+        """Remove the mask from the selected layer."""
+        row = self.layer_list_widget.currentRow()
+        if row < 0 or row >= len(self.canvas._layers):
+            return
+        self.canvas._layers[row]['mask'] = None
+        self.canvas._painting_mask = False
+        self._paint_mask_cb.blockSignals(True)
+        self._paint_mask_cb.setChecked(False)
+        self._paint_mask_cb.blockSignals(False)
+        self.canvas._render_layers()
+        self._refresh_layer_list()
+
+    def _on_invert_layer_mask(self):
+        """Invert the mask on the selected layer."""
+        row = self.layer_list_widget.currentRow()
+        if row < 0 or row >= len(self.canvas._layers):
+            return
+        mask = self.canvas._layers[row].get('mask')
+        if mask is None:
+            return
+        self.canvas._layers[row]['mask'] = 255 - mask
+        self.canvas._render_layers()
+        self._refresh_layer_list()
+
+    def _on_paint_mask_toggled(self, checked):
+        """Toggle painting on the layer mask vs the image."""
+        self.canvas._painting_mask = checked
+
+    def _create_layer_group(self):
+        """Create a layer group folder."""
+        name, ok = QtWidgets.QInputDialog.getText(self, "Layer Group", "Group name:")
+        if not ok or not name:
+            return
+        group_layer = {
+            'name': f"📁 {name}",
+            'shader': 'Original',
+            'params': {},
+            'visible': True,
+            'locked': False,
+            'opacity': 1.0,
+            'blend_mode': 'normal',
+            'mask': None,
+            'clipping': False,
+            'group': None,
+            'type': 'group',
+            'vector_paths': [],
+            'collapsed': False,
+        }
+        self.canvas._layers.append(group_layer)
+        self._refresh_layer_list()
+
+    def _assign_to_group(self):
+        """Assign selected layer to a group."""
+        row = self.layer_list_widget.currentRow()
+        if row < 0 or row >= len(self.canvas._layers):
+            return
+        groups = [l['name'] for l in self.canvas._layers if l.get('type') == 'group']
+        if not groups:
+            return
+        group, ok = QtWidgets.QInputDialog.getItem(self, "Assign to Group", "Group:", groups, 0, False)
+        if ok and group:
+            self.canvas._layers[row]['group'] = group
+            self._refresh_layer_list()
+
+    def _refresh_layer_list(self):
+        """Rebuild the layer list widget from canvas._layers."""
+        self.layer_list_widget.blockSignals(True)
+        current_row = self.layer_list_widget.currentRow()
+        self.layer_list_widget.clear()
+        for i, layer in enumerate(self.canvas._layers):
+            vis_icon = "👁" if layer['visible'] else "  "
+            lock_icon = "🔒" if layer['locked'] else "  "
+            mask_icon = "M" if layer.get('mask') is not None else " "
+            clip_icon = "C" if layer.get('clipping', False) else " "
+            opacity_str = f"{int(layer['opacity'] * 100)}%"
+            blend_str = layer['blend_mode'].title()
+            text = f"{vis_icon} {lock_icon} {mask_icon}{clip_icon} {layer['name']}  ({blend_str} {opacity_str})"
+            item = QtWidgets.QListWidgetItem(text)
+            if not layer['visible']:
+                item.setForeground(QtGui.QColor("#666"))
+            self.layer_list_widget.addItem(item)
+        # Restore selection
+        if current_row >= 0 and current_row < self.layer_list_widget.count():
+            self.layer_list_widget.setCurrentRow(current_row)
+        elif self.layer_list_widget.count() > 0:
+            self.layer_list_widget.setCurrentRow(self.layer_list_widget.count() - 1)
+        self.layer_list_widget.blockSignals(False)
+        # Also sync chain display label
+        layer_names = [l['name'] for l in self.canvas._layers if l['visible']]
+        self.chain_display_label.setText(" → ".join(layer_names) if len(layer_names) > 1 else "No chain")
+
+    def _toggle_layer_visibility(self, index):
+        """Toggle visibility of a layer."""
+        if index < 0 or index >= len(self.canvas._layers):
+            return
+        current = self.canvas._layers[index]['visible']
+        self.canvas.set_layer_prop(index, 'visible', not current)
+        self._refresh_layer_list()
+        self._update_histogram()
+
+    def _toggle_layer_lock(self, index):
+        """Toggle lock state of a layer."""
+        if index < 0 or index >= len(self.canvas._layers):
+            return
+        current = self.canvas._layers[index]['locked']
+        self.canvas.set_layer_prop(index, 'locked', not current)
+        self._refresh_layer_list()
+
+    # --- Animation Timeline (UI) ---
+
+    def _refresh_frame_strip(self):
+        """Rebuild the frame strip buttons from canvas._anim_frames."""
+        # Clear existing buttons
+        while self._frame_strip_layout.count() > 0:
+            item = self._frame_strip_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        # Add frame buttons
+        for i in range(len(self.canvas._anim_frames)):
+            btn = QtWidgets.QPushButton(str(i + 1))
+            btn.setFixedSize(28, 24)
+            if i == self.canvas._anim_current_frame:
+                btn.setStyleSheet("background-color: #5a9fff; color: #fff; font-size: 10px; font-weight: bold; border-radius: 3px;")
+            else:
+                btn.setStyleSheet("background-color: #333; color: #aaa; font-size: 10px; border-radius: 3px;")
+            btn.clicked.connect(lambda _, idx=i: self._on_frame_clicked(idx))
+            self._frame_strip_layout.addWidget(btn)
+        self._frame_strip_layout.addStretch()
+        # Update frame label
+        total = len(self.canvas._anim_frames)
+        current = self.canvas._anim_current_frame + 1
+        self.anim_frame_label.setText(f"Frame {current} / {total}")
+
+    def _on_frame_clicked(self, index):
+        """Switch to a specific animation frame."""
+        self.canvas.save_frame_state()
+        self.canvas.set_anim_frame(index)
+        self._refresh_frame_strip()
+        self._refresh_layer_list()
+
+    def _anim_prev_frame(self):
+        """Go to the previous animation frame."""
+        if not self.canvas._anim_frames:
+            return
+        self.canvas.save_frame_state()
+        new_idx = self.canvas._anim_current_frame - 1
+        if new_idx < 0:
+            new_idx = len(self.canvas._anim_frames) - 1 if self.canvas._anim_loop else 0
+        self.canvas.set_anim_frame(new_idx)
+        self._refresh_frame_strip()
+        self._refresh_layer_list()
+
+    def _anim_next_frame(self):
+        """Go to the next animation frame."""
+        if not self.canvas._anim_frames:
+            return
+        self.canvas.save_frame_state()
+        new_idx = self.canvas._anim_current_frame + 1
+        if new_idx >= len(self.canvas._anim_frames):
+            new_idx = 0 if self.canvas._anim_loop else len(self.canvas._anim_frames) - 1
+        self.canvas.set_anim_frame(new_idx)
+        self._refresh_frame_strip()
+        self._refresh_layer_list()
+
+    def _toggle_anim_playback(self):
+        """Toggle animation playback."""
+        self.canvas.toggle_animation()
+        self._update_anim_ui()
+
+    def _on_anim_fps_changed(self, value):
+        """Handle FPS spinner change."""
+        self.canvas.set_anim_fps(value)
+
+    def _on_onion_skin_toggled(self, checked):
+        """Toggle onion skin display."""
+        self.canvas._onion_skin = checked
+        self.canvas.update()
+
+    def _add_anim_frame(self):
+        """Add a new animation frame with current layer state."""
+        self.canvas.save_frame_state()
+        self.canvas.add_anim_frame()
+        self._refresh_frame_strip()
+
+    def _dup_anim_frame(self):
+        """Duplicate the current animation frame."""
+        self.canvas.save_frame_state()
+        self.canvas.duplicate_anim_frame(self.canvas._anim_current_frame)
+        self._refresh_frame_strip()
+
+    def _del_anim_frame(self):
+        """Delete the current animation frame."""
+        if len(self.canvas._anim_frames) <= 1:
+            return
+        self.canvas.delete_anim_frame(self.canvas._anim_current_frame)
+        self._refresh_frame_strip()
+        self._refresh_layer_list()
+
+    def _update_anim_ui(self):
+        """Update animation UI elements (play button icon, frame highlight)."""
+        if self.canvas._anim_playing:
+            self.anim_play_btn.setText("⏸")
+            self.anim_play_btn.setStyleSheet("font-size: 12px; padding: 2px; background-color: #5a5a2d;")
+        else:
+            self.anim_play_btn.setText("▶")
+            self.anim_play_btn.setStyleSheet("font-size: 12px; padding: 2px; background-color: #2d5a2d;")
+        self._refresh_frame_strip()
+        self._refresh_layer_list()
 
     # --- Histogram ---
 
@@ -14397,6 +22965,23 @@ Only respond with valid JSON, no other text. Example:
 
     # --- 3D Mode Methods ---
 
+    def _pick_bg_color(self):
+        """Open a color picker for the viewport background color."""
+        r, g, b, a = self.canvas.bg_color
+        current = QtGui.QColor(int(r * 255), int(g * 255), int(b * 255), int(a * 255))
+        color = QtWidgets.QColorDialog.getColor(
+            current, self, "Viewport Background Color",
+            QtWidgets.QColorDialog.ColorDialogOption.ShowAlphaChannel
+        )
+        if color.isValid():
+            self.canvas.bg_color = (
+                color.redF(), color.greenF(), color.blueF(), color.alphaF()
+            )
+            self.bg_color_btn.setStyleSheet(
+                f"background-color: {color.name()}; border: 2px solid #555; border-radius: 3px;"
+            )
+            self.canvas.update()
+
     def _load_primitive(self, text):
         """Load a primitive 3D shape."""
         if text == "Load Primitive...":
@@ -14408,8 +22993,12 @@ Only respond with valid JSON, no other text. Example:
 
         if self.canvas.load_primitive(text.lower()):
             self.image_info.setText(f"3D Primitive: {text}")
-            self.controls_3d.show()
+            self._light_container.show()
+            self._sync_lighting_ui()
+            self._refresh_tex_material_combo()
+            self._sync_zoom_slider()
             self.mode_2d_btn.setEnabled(True)
+            self._set_active_tool("none")
 
     def load_3d_model(self):
         """Load a 3D model (OBJ, GLTF, GLB)."""
@@ -14420,15 +23009,22 @@ Only respond with valid JSON, no other text. Example:
         if path:
             if self.canvas.load_3d_model(path):
                 self.image_info.setText(f"3D Model: {os.path.basename(path)}")
-                self.controls_3d.show()
+                self._light_container.show()
+                self._sync_lighting_ui()
+                self._refresh_tex_material_combo()
+                self._sync_zoom_slider()
                 self.mode_2d_btn.setEnabled(True)
+                self._set_active_tool("none")
 
     def _switch_to_2d(self):
         """Switch back to 2D mode."""
         self.canvas.set_2d_mode()
-        self.controls_3d.hide()
+        self._light_container.hide()
         self.mode_2d_btn.setEnabled(False)
-        self.auto_rotate_cb.setChecked(False)
+        self._cam_auto_rotate_cb.setChecked(False)
+        # Switch to Markup tab if we have an image
+        if self.canvas._has_image:
+            self._switch_to_markup_tab()
 
     def _toggle_auto_rotate(self, enabled):
         """Toggle auto-rotation."""
@@ -14442,6 +23038,248 @@ Only respond with valid JSON, no other text. Example:
         """Update zoom level."""
         self.canvas.zoom = value / 10.0
         self.canvas.update()
+
+    def _sync_zoom_slider(self):
+        """Sync the zoom slider range and value to match the canvas auto-fit zoom."""
+        zoom = self.canvas.zoom
+        # Set slider max to at least 3x the initial zoom so user can zoom out well past load distance
+        max_zoom = max(20.0, self.canvas._initial_zoom * 3.0)
+        self._cam_zoom_slider.blockSignals(True)
+        self._cam_zoom_slider.setRange(5, int(max_zoom * 10))
+        self._cam_zoom_slider.setValue(int(zoom * 10))
+        self._cam_zoom_slider.blockSignals(False)
+
+    # --- Camera Pitch / Yaw / FOV handlers ---
+
+    def _update_pitch(self, value):
+        """Update camera pitch from slider (value is x10)."""
+        self.canvas.rotation_x = value / 10.0
+        self._cam_pitch_val.setText(f"{self.canvas.rotation_x:.1f}\u00b0")
+        self.canvas.update()
+
+    def _update_yaw(self, value):
+        """Update camera yaw from slider (value is x10)."""
+        self.canvas.rotation_y = value / 10.0
+        self._cam_yaw_val.setText(f"{self.canvas.rotation_y:.1f}\u00b0")
+        self.canvas.update()
+
+    def _update_fov(self, value):
+        """Update camera FOV from slider."""
+        self.canvas.fov = float(value)
+        self._cam_fov_val.setText(f"{value}\u00b0")
+        self.canvas.update()
+
+    def _apply_standard_view(self, view_name):
+        """Apply a built-in standard camera view (preserving zoom and FOV)."""
+        preset = BUILTIN_CAMERA_PRESETS.get(view_name, {})
+        self.canvas.rotation_x = preset.get("rotation_x", 0.0)
+        self.canvas.rotation_y = preset.get("rotation_y", 0.0)
+        self.canvas.rotation_z = preset.get("rotation_z", 0.0)
+        self.canvas.pan_x = 0.0
+        self.canvas.pan_y = 0.0
+        self.canvas.auto_rotate = False
+        self._cam_auto_rotate_cb.setChecked(False)
+        self._sync_all_camera_ui()
+        self.canvas.update()
+
+    def _reset_camera_ui(self):
+        """Reset camera to defaults and sync UI."""
+        self.canvas.reset_camera()
+        self._sync_all_camera_ui()
+        self._cam_auto_rotate_cb.setChecked(False)
+
+    # --- Camera UI Sync ---
+
+    def _sync_all_camera_ui(self):
+        """Sync all camera UI controls to match current canvas state."""
+        c = self.canvas
+        self._cam_pitch_slider.blockSignals(True)
+        self._cam_pitch_slider.setValue(int(c.rotation_x * 10))
+        self._cam_pitch_slider.blockSignals(False)
+        self._cam_pitch_val.setText(f"{c.rotation_x:.1f}\u00b0")
+
+        self._cam_yaw_slider.blockSignals(True)
+        self._cam_yaw_slider.setValue(int(c.rotation_y * 10))
+        self._cam_yaw_slider.blockSignals(False)
+        self._cam_yaw_val.setText(f"{c.rotation_y:.1f}\u00b0")
+
+        self._cam_fov_slider.blockSignals(True)
+        self._cam_fov_slider.setValue(int(c.fov))
+        self._cam_fov_slider.blockSignals(False)
+        self._cam_fov_val.setText(f"{int(c.fov)}\u00b0")
+
+        self._cam_auto_rotate_cb.blockSignals(True)
+        self._cam_auto_rotate_cb.setChecked(c.auto_rotate)
+        self._cam_auto_rotate_cb.blockSignals(False)
+
+        self._cam_speed_slider.blockSignals(True)
+        self._cam_speed_slider.setValue(int(c.rotation_speed * 10))
+        self._cam_speed_slider.blockSignals(False)
+
+        self._sync_zoom_slider()
+
+    # --- Camera Presets ---
+
+    def _refresh_camera_preset_combo(self):
+        """Refresh camera preset dropdown with builtins and user presets."""
+        self._camera_preset_combo.blockSignals(True)
+        self._camera_preset_combo.clear()
+        self._camera_preset_combo.addItem("Apply Preset...")
+        # Built-in presets
+        for name in BUILTIN_CAMERA_PRESETS:
+            self._camera_preset_combo.addItem(f"[B] {name}")
+        # User presets
+        user_presets = CAM_LIGHT_DATA.get("camera_presets", {})
+        if user_presets:
+            self._camera_preset_combo.addItem("\u2500\u2500\u2500 Custom \u2500\u2500\u2500")
+            idx = self._camera_preset_combo.count() - 1
+            model = self._camera_preset_combo.model()
+            model.item(idx).setEnabled(False)
+            for name in sorted(user_presets.keys()):
+                self._camera_preset_combo.addItem(name)
+        self._camera_preset_combo.blockSignals(False)
+
+    def _apply_camera_preset(self, text):
+        """Apply a camera preset from the dropdown."""
+        if not text or text == "Apply Preset..." or text.startswith("\u2500"):
+            return
+        if text.startswith("[B] "):
+            name = text[4:]
+            state = dict(BUILTIN_CAMERA_PRESETS.get(name, {}))
+            # Preserve current zoom from auto-fit
+            state["zoom"] = self.canvas.zoom
+        else:
+            state = CAM_LIGHT_DATA.get("camera_presets", {}).get(text, {})
+        if state:
+            self.canvas.set_camera_state(state)
+            self._sync_all_camera_ui()
+        # Reset combo to placeholder
+        self._camera_preset_combo.blockSignals(True)
+        self._camera_preset_combo.setCurrentIndex(0)
+        self._camera_preset_combo.blockSignals(False)
+
+    def _save_camera_preset(self):
+        """Save current camera state as a named preset."""
+        name, ok = QtWidgets.QInputDialog.getText(self, "Save Camera Preset", "Preset name:")
+        if ok and name and name.strip():
+            name = name.strip()
+            if name in BUILTIN_CAMERA_PRESETS:
+                QtWidgets.QMessageBox.warning(self, "Reserved Name",
+                                               f"'{name}' is a built-in preset name. Choose another.")
+                return
+            CAM_LIGHT_DATA.setdefault("camera_presets", {})[name] = self.canvas.get_camera_state()
+            save_cam_light_data()
+            self._refresh_camera_preset_combo()
+
+    def _delete_camera_preset(self):
+        """Delete the selected user camera preset."""
+        text = self._camera_preset_combo.currentText()
+        if not text or text == "Apply Preset..." or text.startswith("[B]") or text.startswith("\u2500"):
+            return
+        if text in CAM_LIGHT_DATA.get("camera_presets", {}):
+            reply = QtWidgets.QMessageBox.question(
+                self, "Delete Camera Preset",
+                f"Delete camera preset '{text}'?",
+                QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No)
+            if reply == QtWidgets.QMessageBox.StandardButton.Yes:
+                del CAM_LIGHT_DATA["camera_presets"][text]
+                save_cam_light_data()
+                self._refresh_camera_preset_combo()
+
+    # --- Multiple Cameras ---
+
+    def _refresh_camera_slot_combo(self):
+        """Refresh the camera slot dropdown."""
+        cameras = CAM_LIGHT_DATA.get("cameras", {})
+        if not cameras:
+            cameras["Camera 1"] = self.canvas.get_camera_state()
+            CAM_LIGHT_DATA["cameras"] = cameras
+            CAM_LIGHT_DATA["active_camera"] = "Camera 1"
+        self._camera_slot_combo.blockSignals(True)
+        self._camera_slot_combo.clear()
+        for name in cameras:
+            self._camera_slot_combo.addItem(name)
+        active = CAM_LIGHT_DATA.get("active_camera", "Camera 1")
+        idx = self._camera_slot_combo.findText(active)
+        if idx >= 0:
+            self._camera_slot_combo.setCurrentIndex(idx)
+        self._camera_slot_combo.blockSignals(False)
+
+    def _on_camera_slot_changed(self, name):
+        """Switch to a different camera slot."""
+        if not name:
+            return
+        # Save current camera state to the old active slot
+        old_active = CAM_LIGHT_DATA.get("active_camera")
+        if old_active and old_active in CAM_LIGHT_DATA.get("cameras", {}):
+            CAM_LIGHT_DATA["cameras"][old_active] = self.canvas.get_camera_state()
+        # Load new camera
+        CAM_LIGHT_DATA["active_camera"] = name
+        state = CAM_LIGHT_DATA.get("cameras", {}).get(name, {})
+        if state:
+            self.canvas.set_camera_state(state)
+            self._sync_all_camera_ui()
+
+    def _add_camera_slot(self):
+        """Add a new camera slot with current camera state."""
+        cameras = CAM_LIGHT_DATA.setdefault("cameras", {})
+        # Save current to old slot first
+        old_active = CAM_LIGHT_DATA.get("active_camera")
+        if old_active and old_active in cameras:
+            cameras[old_active] = self.canvas.get_camera_state()
+        n = len(cameras) + 1
+        while f"Camera {n}" in cameras:
+            n += 1
+        name = f"Camera {n}"
+        cameras[name] = self.canvas.get_camera_state()
+        CAM_LIGHT_DATA["active_camera"] = name
+        save_cam_light_data()
+        self._refresh_camera_slot_combo()
+
+    def _rename_camera_slot(self):
+        """Rename the current camera slot."""
+        old_name = self._camera_slot_combo.currentText()
+        if not old_name:
+            return
+        new_name, ok = QtWidgets.QInputDialog.getText(
+            self, "Rename Camera", "New name:", text=old_name)
+        if ok and new_name and new_name.strip() and new_name.strip() != old_name:
+            new_name = new_name.strip()
+            cameras = CAM_LIGHT_DATA.get("cameras", {})
+            if new_name in cameras:
+                QtWidgets.QMessageBox.warning(self, "Name Exists",
+                                               f"Camera '{new_name}' already exists.")
+                return
+            cameras[new_name] = cameras.pop(old_name)
+            if CAM_LIGHT_DATA.get("active_camera") == old_name:
+                CAM_LIGHT_DATA["active_camera"] = new_name
+            save_cam_light_data()
+            self._refresh_camera_slot_combo()
+
+    def _delete_camera_slot(self):
+        """Delete the current camera slot (minimum 1 must remain)."""
+        cameras = CAM_LIGHT_DATA.get("cameras", {})
+        if len(cameras) <= 1:
+            QtWidgets.QMessageBox.warning(self, "Cannot Delete",
+                                           "At least one camera must exist.")
+            return
+        name = self._camera_slot_combo.currentText()
+        if not name:
+            return
+        reply = QtWidgets.QMessageBox.question(
+            self, "Delete Camera",
+            f"Delete camera '{name}'?",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No)
+        if reply == QtWidgets.QMessageBox.StandardButton.Yes:
+            del cameras[name]
+            first = next(iter(cameras))
+            CAM_LIGHT_DATA["active_camera"] = first
+            save_cam_light_data()
+            self._refresh_camera_slot_combo()
+            state = cameras.get(first, {})
+            if state:
+                self.canvas.set_camera_state(state)
+                self._sync_all_camera_ui()
 
     # --- Render Passes ---
 
@@ -14474,7 +23312,7 @@ Only respond with valid JSON, no other text. Example:
             if data is not None:
                 img = Image.fromarray(data)
                 out_path = os.path.join(folder, f"render_{pass_name}.png")
-                img.save(out_path)
+                self._save_image(img, out_path)
                 saved.append(pass_name)
         QtWidgets.QMessageBox.information(
             self, "Export Passes",
@@ -14535,14 +23373,65 @@ Only respond with valid JSON, no other text. Example:
     def load_image(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
             self, "Open Image", "",
-            "Images (*.png *.jpg *.jpeg *.bmp *.tiff *.gif);;GIF Animation (*.gif);;All Files (*)"
+            self._build_import_filters()
         )
         if path:
+            self._batch_nav_clear()  # Clear batch navigation when loading a single image
             self.canvas.set_2d_mode()
-            self.controls_3d.hide()
+            self._light_container.hide()
             self.mode_2d_btn.setEnabled(False)
             if self.canvas.load_texture(path):
                 self._on_image_loaded(path)
+
+    def _save_image(self, img, path, quality=95):
+        """Save a PIL Image to path with format-specific handling."""
+        ext = os.path.splitext(path)[1].lower()
+        if ext in ('.jpg', '.jpeg'):
+            img = img.convert('RGB')
+            img.save(path, quality=quality)
+        elif ext == '.webp':
+            img.save(path, format='WEBP', quality=quality, lossless=False)
+        elif ext == '.avif':
+            img.save(path, format='AVIF', quality=quality)
+        elif ext == '.ico':
+            sizes = [(s, s) for s in [16, 32, 48, 64, 128, 256] if s <= min(img.size)]
+            if not sizes:
+                sizes = [(16, 16)]
+            img.save(path, format='ICO', sizes=sizes)
+        elif ext == '.exr':
+            arr = np.array(img).astype(np.float32) / 255.0
+            imageio.imwrite(path, arr)
+        elif ext == '.hdr':
+            arr = np.array(img.convert('RGB')).astype(np.float32) / 255.0
+            imageio.imwrite(path, arr, format='HDR')
+        elif ext == '.svg':
+            self._export_svg_trace(img, path)
+        elif ext == '.psd':
+            self._export_psd_layers(path)
+        else:
+            img.save(path)
+
+    def _build_export_filters(self):
+        """Build dynamic file dialog filter string based on available formats."""
+        filters = "PNG (*.png);;JPEG (*.jpg *.jpeg);;WebP (*.webp)"
+        if AVIF_AVAILABLE:
+            filters += ";;AVIF (*.avif)"
+        filters += ";;BMP (*.bmp);;TIFF (*.tiff);;ICO (*.ico)"
+        if EXR_AVAILABLE:
+            filters += ";;EXR (*.exr)"
+        if HDR_AVAILABLE:
+            filters += ";;HDR Radiance (*.hdr)"
+        if VIDEO_AVAILABLE:
+            filters += ";;SVG Trace (*.svg)"
+        filters += ";;PSD Layered (*.psd)"
+        return filters
+
+    def _build_import_filters(self):
+        """Build dynamic file dialog filter string for image import."""
+        exts = "*.png *.jpg *.jpeg *.bmp *.tiff *.gif *.webp"
+        if AVIF_AVAILABLE:
+            exts += " *.avif"
+        return f"Images ({exts});;GIF Animation (*.gif);;All Files (*)"
 
     def export_image(self):
         if not self.canvas.image_path and not self.canvas.mode_3d:
@@ -14559,7 +23448,7 @@ Only respond with valid JSON, no other text. Example:
 
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self, "Export Image", default,
-            "PNG (*.png);;JPEG (*.jpg *.jpeg);;BMP (*.bmp);;TIFF (*.tiff)"
+            self._build_export_filters()
         )
         if path:
             try:
@@ -14567,7 +23456,7 @@ Only respond with valid JSON, no other text. Example:
                 image_data = self.canvas.export_to_image()
                 if image_data is not None:
                     img = Image.fromarray(image_data)
-                    img.save(path)
+                    self._save_image(img, path)
                     QtWidgets.QMessageBox.information(
                         self, "Export Complete",
                         f"Image exported to:\n{path}"
@@ -14583,6 +23472,358 @@ Only respond with valid JSON, no other text. Example:
                     f"Error exporting image: {e}"
                 )
 
+    def _export_svg_trace(self, img, path):
+        """Export a traced SVG from the image using OpenCV contours."""
+        if not VIDEO_AVAILABLE:
+            QtWidgets.QMessageBox.warning(
+                self, "Not Available",
+                "SVG trace export requires OpenCV.\nInstall: pip install opencv-python"
+            )
+            return
+        arr = np.array(img.convert('L'))
+        # Threshold to binary
+        _, binary = cv2.threshold(arr, 127, 255, cv2.THRESH_BINARY)
+        contours, _ = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        h, w = arr.shape
+        svg_lines = [
+            f'<?xml version="1.0" encoding="UTF-8"?>',
+            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}">',
+        ]
+        for contour in contours:
+            if len(contour) < 3:
+                continue
+            # Simplify contour to reduce vertices
+            epsilon = 0.5 * cv2.arcLength(contour, True) / max(len(contour), 1)
+            approx = cv2.approxPolyDP(contour, max(epsilon, 0.5), True)
+            pts = approx.squeeze()
+            if pts.ndim != 2 or len(pts) < 3:
+                continue
+            d = f"M {pts[0][0]},{pts[0][1]}"
+            for pt in pts[1:]:
+                d += f" L {pt[0]},{pt[1]}"
+            d += " Z"
+            svg_lines.append(f'  <path d="{d}" fill="black" stroke="none"/>')
+        svg_lines.append('</svg>')
+        with open(path, 'w') as f:
+            f.write('\n'.join(svg_lines))
+
+    def export_svg_trace(self):
+        """Menu action: Export current render as SVG trace."""
+        if not VIDEO_AVAILABLE:
+            QtWidgets.QMessageBox.warning(
+                self, "Not Available",
+                "SVG trace export requires OpenCV.\nInstall: pip install opencv-python"
+            )
+            return
+        if not self.canvas.image_path and not self.canvas.mode_3d:
+            QtWidgets.QMessageBox.warning(self, "Warning", "No image loaded.")
+            return
+        base = os.path.splitext(os.path.basename(self.canvas.image_path or "render"))[0]
+        default = f"{base}_trace.svg"
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Export SVG Trace", default, "SVG (*.svg)"
+        )
+        if path:
+            try:
+                image_data = self.canvas.export_to_image()
+                if image_data is not None:
+                    img = Image.fromarray(image_data)
+                    self._export_svg_trace(img, path)
+                    QtWidgets.QMessageBox.information(
+                        self, "SVG Export Complete", f"SVG trace exported to:\n{path}"
+                    )
+            except Exception as e:
+                QtWidgets.QMessageBox.warning(self, "SVG Export Failed", f"Error: {e}")
+
+    def export_sprite_sheet(self):
+        """Export animation frames as a sprite sheet."""
+        if len(self.canvas._anim_frames) < 2:
+            QtWidgets.QMessageBox.information(
+                self, "Sprite Sheet",
+                "Add at least 2 animation frames before exporting a sprite sheet."
+            )
+            return
+        # Settings dialog
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Sprite Sheet Export")
+        dialog.setMinimumWidth(300)
+        dlg_layout = QtWidgets.QFormLayout(dialog)
+
+        frame_count = len(self.canvas._anim_frames)
+        default_cols = max(1, int(math.ceil(math.sqrt(frame_count))))
+
+        cols_spin = QtWidgets.QSpinBox()
+        cols_spin.setRange(1, frame_count)
+        cols_spin.setValue(default_cols)
+        dlg_layout.addRow("Columns:", cols_spin)
+
+        padding_spin = QtWidgets.QSpinBox()
+        padding_spin.setRange(0, 64)
+        padding_spin.setValue(0)
+        dlg_layout.addRow("Padding (px):", padding_spin)
+
+        btn_layout = QtWidgets.QHBoxLayout()
+        cancel_btn = QtWidgets.QPushButton("Cancel")
+        cancel_btn.clicked.connect(dialog.reject)
+        btn_layout.addWidget(cancel_btn)
+        export_btn = QtWidgets.QPushButton("Export...")
+        export_btn.setStyleSheet("background-color: #4a6fa5;")
+        export_btn.clicked.connect(dialog.accept)
+        btn_layout.addWidget(export_btn)
+        dlg_layout.addRow(btn_layout)
+
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+
+        cols = cols_spin.value()
+        padding = padding_spin.value()
+        rows = int(math.ceil(frame_count / cols))
+
+        # Save current state
+        saved_frame = self.canvas._anim_current_frame
+        self.canvas.save_frame_state()
+
+        base = os.path.splitext(os.path.basename(self.canvas.image_path or "anim"))[0]
+        default_path = f"{base}_spritesheet.png"
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save Sprite Sheet", default_path,
+            self._build_export_filters()
+        )
+        if not path:
+            # Restore state
+            self.canvas.set_anim_frame(saved_frame)
+            return
+
+        try:
+            QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
+            w, h = self.canvas.image_size
+            sheet_w = cols * w + (cols - 1) * padding
+            sheet_h = rows * h + (rows - 1) * padding
+            sheet = Image.new('RGBA', (sheet_w, sheet_h), (0, 0, 0, 0))
+
+            for i in range(frame_count):
+                self.canvas.set_anim_frame(i)
+                self.canvas._render_layers()
+                frame_data = self.canvas.export_to_image()
+                if frame_data is not None:
+                    frame_img = Image.fromarray(frame_data)
+                    col = i % cols
+                    row = i // cols
+                    x = col * (w + padding)
+                    y = row * (h + padding)
+                    sheet.paste(frame_img, (x, y))
+
+            self._save_image(sheet, path)
+            QtWidgets.QApplication.restoreOverrideCursor()
+            QtWidgets.QMessageBox.information(
+                self, "Sprite Sheet Complete",
+                f"Exported {frame_count} frames ({cols}x{rows}) to:\n{path}"
+            )
+        except Exception as e:
+            QtWidgets.QApplication.restoreOverrideCursor()
+            QtWidgets.QMessageBox.warning(self, "Sprite Sheet Failed", f"Error: {e}")
+        finally:
+            # Restore state
+            self.canvas.set_anim_frame(saved_frame)
+            self._refresh_frame_strip()
+
+    def _export_psd_layers(self, path):
+        """Export current layers as a PSD file with preserved layer structure."""
+        layers = self.canvas._layers
+        w, h = self.canvas.image_size
+        if not layers:
+            return
+
+        # Render each layer to get pixel data
+        layer_renders = []
+        saved_preset = self.canvas.current_preset
+        saved_params = dict(self.canvas.params)
+        self.canvas.makeCurrent()
+
+        for layer in layers:
+            shader_name = layer['shader']
+            if shader_name == 'Original':
+                # Background layer — use original image data
+                if self.canvas._original_image_data is not None:
+                    data = np.flipud(self.canvas._original_image_data.copy())
+                else:
+                    data = np.zeros((h, w, 4), dtype=np.uint8)
+            else:
+                # Render this shader
+                self.canvas.current_preset = shader_name
+                self.canvas._compile_shader()
+                if self.canvas.program is not None:
+                    data = self.canvas._export_2d_single(self.canvas.program, layer['params'], w, h)
+                    if data is None:
+                        data = np.zeros((h, w, 4), dtype=np.uint8)
+                else:
+                    data = np.zeros((h, w, 4), dtype=np.uint8)
+            layer_renders.append(data)
+
+        # Restore shader
+        self.canvas.current_preset = saved_preset
+        self.canvas.params = saved_params
+        self.canvas._compile_shader()
+
+        # PSD blend mode byte mappings
+        blend_map = {
+            'normal': b'norm', 'multiply': b'mul ', 'screen': b'scrn',
+            'overlay': b'over', 'add': b'lddg', 'subtract': b'fsub',
+        }
+
+        # Build flattened composite for the merged image data section
+        composite = layer_renders[0].copy() if layer_renders else np.zeros((h, w, 4), dtype=np.uint8)
+        # Simple alpha-over composite for merged data
+        for i in range(1, len(layer_renders)):
+            if not layers[i].get('visible', True):
+                continue
+            layer_data = layer_renders[i]
+            opacity = layers[i].get('opacity', 1.0)
+            alpha = layer_data[:, :, 3:4].astype(np.float32) / 255.0 * opacity
+            composite = (composite.astype(np.float32) * (1 - alpha) + layer_data.astype(np.float32) * alpha)
+            composite = np.clip(composite, 0, 255).astype(np.uint8)
+
+        with open(path, 'wb') as f:
+            # === File Header Section ===
+            f.write(b'8BPS')                          # Signature
+            f.write(struct.pack('>H', 1))             # Version
+            f.write(b'\x00' * 6)                      # Reserved
+            f.write(struct.pack('>H', 4))             # Channels (RGBA)
+            f.write(struct.pack('>I', h))             # Height
+            f.write(struct.pack('>I', w))             # Width
+            f.write(struct.pack('>H', 8))             # Depth (8 bit)
+            f.write(struct.pack('>H', 3))             # Color mode (RGB)
+
+            # === Color Mode Data Section ===
+            f.write(struct.pack('>I', 0))
+
+            # === Image Resources Section ===
+            f.write(struct.pack('>I', 0))
+
+            # === Layer and Mask Information Section ===
+            layer_section_start = f.tell()
+            f.write(struct.pack('>I', 0))  # Placeholder for layer section length
+
+            layer_info_start = f.tell()
+            f.write(struct.pack('>I', 0))  # Placeholder for layer info length
+
+            # Layer count (negative = first alpha channel is transparency)
+            num_layers = len(layers)
+            f.write(struct.pack('>h', -num_layers))
+
+            # Layer records
+            channel_data_list = []
+            for i, layer in enumerate(layers):
+                data = layer_renders[i]
+                # Layer rectangle: top, left, bottom, right
+                f.write(struct.pack('>i', 0))         # top
+                f.write(struct.pack('>i', 0))         # left
+                f.write(struct.pack('>i', h))         # bottom
+                f.write(struct.pack('>i', w))         # right
+
+                # Number of channels
+                f.write(struct.pack('>H', 4))         # R, G, B, A
+
+                # Channel info (id, length)
+                # Prepare raw channel data (uncompressed)
+                channels = []
+                for ch_id, ch_idx in [(-1, 3), (0, 0), (1, 1), (2, 2)]:  # A, R, G, B
+                    ch_data = data[:, :, ch_idx].tobytes()
+                    # Compression type (0 = raw) + raw data
+                    compressed = struct.pack('>H', 0) + ch_data
+                    channels.append((ch_id, compressed))
+                    f.write(struct.pack('>h', ch_id))        # Channel ID
+                    f.write(struct.pack('>I', len(compressed)))  # Data length
+
+                channel_data_list.append(channels)
+
+                # Blend mode signature
+                f.write(b'8BIM')
+                # Blend mode key
+                bm = layer.get('blend_mode', 'normal')
+                f.write(blend_map.get(bm, b'norm'))
+
+                # Opacity (0-255)
+                opacity_byte = int(layer.get('opacity', 1.0) * 255)
+                f.write(struct.pack('>B', min(255, max(0, opacity_byte))))
+
+                # Clipping, Flags, Filler
+                f.write(struct.pack('>B', 0))        # Clipping (0=base)
+                visible = layer.get('visible', True)
+                flags = 0 if visible else 2          # Bit 1 = invisible
+                f.write(struct.pack('>B', flags))
+                f.write(struct.pack('>B', 0))        # Filler
+
+                # Extra data length
+                layer_name = layer.get('name', f'Layer {i}')
+                # Layer name: Pascal string (1 byte length + name, padded to multiple of 4)
+                name_bytes = layer_name.encode('ascii', errors='replace')[:255]
+                pascal_len = 1 + len(name_bytes)
+                # Pad to multiple of 4
+                padded_pascal_len = pascal_len + (4 - pascal_len % 4) % 4
+                # Layer mask data (0) + blending ranges (0) + padded name
+                extra_data_len = 4 + 4 + padded_pascal_len
+                f.write(struct.pack('>I', extra_data_len))
+
+                # Layer mask data
+                f.write(struct.pack('>I', 0))
+                # Blending ranges
+                f.write(struct.pack('>I', 0))
+                # Layer name (Pascal string)
+                f.write(struct.pack('>B', len(name_bytes)))
+                f.write(name_bytes)
+                # Padding
+                pad_count = padded_pascal_len - pascal_len
+                f.write(b'\x00' * pad_count)
+
+            # Channel image data for all layers
+            for channels in channel_data_list:
+                for ch_id, compressed in channels:
+                    f.write(compressed)
+
+            # Patch layer info length
+            layer_info_end = f.tell()
+            layer_info_len = layer_info_end - layer_info_start - 4
+            f.seek(layer_info_start)
+            f.write(struct.pack('>I', layer_info_len))
+            f.seek(layer_info_end)
+
+            # Patch layer section length
+            layer_section_end = f.tell()
+            layer_section_len = layer_section_end - layer_section_start - 4
+            f.seek(layer_section_start)
+            f.write(struct.pack('>I', layer_section_len))
+            f.seek(layer_section_end)
+
+            # === Image Data Section (merged/flattened composite) ===
+            f.write(struct.pack('>H', 0))  # Compression (0 = raw)
+            # Write channels in order: R, G, B, A
+            for ch_idx in [0, 1, 2, 3]:
+                f.write(composite[:, :, ch_idx].tobytes())
+
+    def export_psd_layers(self):
+        """Menu action: Export layers as PSD file."""
+        if not self.canvas.image_path and not self.canvas.mode_3d:
+            QtWidgets.QMessageBox.warning(self, "Warning", "No image loaded.")
+            return
+        base = os.path.splitext(os.path.basename(self.canvas.image_path or "render"))[0]
+        default = f"{base}_layers.psd"
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Export PSD Layers", default, "PSD (*.psd)"
+        )
+        if path:
+            try:
+                QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
+                self._export_psd_layers(path)
+                QtWidgets.QApplication.restoreOverrideCursor()
+                QtWidgets.QMessageBox.information(
+                    self, "PSD Export Complete",
+                    f"Exported {len(self.canvas._layers)} layers to:\n{path}"
+                )
+            except Exception as e:
+                QtWidgets.QApplication.restoreOverrideCursor()
+                QtWidgets.QMessageBox.warning(self, "PSD Export Failed", f"Error: {e}")
+
     def batch_process(self):
         """Batch process multiple images with the current shader settings."""
         # Show batch options dialog
@@ -14595,12 +23836,32 @@ Only respond with valid JSON, no other text. Example:
         format_group = QtWidgets.QGroupBox("Output Format")
         format_layout = QtWidgets.QVBoxLayout(format_group)
 
-        self.batch_individual_radio = QtWidgets.QRadioButton("Individual images (PNG)")
+        # Individual images row with format dropdown
+        indiv_row = QtWidgets.QHBoxLayout()
+        self.batch_individual_radio = QtWidgets.QRadioButton("Individual images")
         self.batch_individual_radio.setChecked(True)
-        format_layout.addWidget(self.batch_individual_radio)
+        indiv_row.addWidget(self.batch_individual_radio)
+
+        self.batch_format_combo = QtWidgets.QComboBox()
+        fmt_list = ["BMP", "ICO", "JPEG", "PNG", "TIFF", "WebP"]
+        if AVIF_AVAILABLE:
+            fmt_list.append("AVIF")
+        if EXR_AVAILABLE:
+            fmt_list.append("EXR")
+        if HDR_AVAILABLE:
+            fmt_list.append("HDR")
+        fmt_list.sort()
+        self.batch_format_combo.addItems(fmt_list)
+        self.batch_format_combo.setFixedWidth(90)
+        indiv_row.addWidget(self.batch_format_combo)
+        indiv_row.addStretch()
+        format_layout.addLayout(indiv_row)
 
         self.batch_gif_radio = QtWidgets.QRadioButton("Animated GIF (combine all images)")
         format_layout.addWidget(self.batch_gif_radio)
+
+        # Show/hide format combo with radio selection
+        self.batch_gif_radio.toggled.connect(lambda checked: self.batch_format_combo.setEnabled(not checked))
 
         layout.addWidget(format_group)
 
@@ -14706,18 +23967,32 @@ Only respond with valid JSON, no other text. Example:
         gif_loop = self.gif_loop_check.isChecked()
         shader_chain = list(self._batch_shader_chain)  # Copy chain before dialog is destroyed
 
+        output_format = self.batch_format_combo.currentText().lower()
+
+        # Save export settings for later use with "Process All"
+        self._batch_export_settings = {
+            'export_as_gif': export_as_gif,
+            'gif_fps': gif_fps,
+            'gif_loop': gif_loop,
+            'shader_chain': shader_chain,
+            'output_format': output_format,
+        }
+
         # Select input files
         files, _ = QtWidgets.QFileDialog.getOpenFileNames(
             self, "Select Images for Batch Processing", "",
-            "Images (*.png *.jpg *.jpeg *.bmp *.tiff *.gif)"
+            self._build_import_filters()
         )
         if not files:
             return
 
-        if export_as_gif:
-            self._batch_export_gif(files, gif_fps, gif_loop)
-        else:
-            self._batch_export_individual(files, shader_chain)
+        # Store files and show navigation bar for previewing
+        self._batch_files = files
+        self._batch_index = 0
+        self._batch_paint_cache.clear()  # Clear paint cache for new batch
+        self._batch_nav_load_current()
+        self._batch_nav_update()
+        self.batch_nav_bar.show()
 
     def _batch_chain_add_shader(self, dialog):
         """Add a shader to the batch chain list."""
@@ -14852,7 +24127,99 @@ Only respond with valid JSON, no other text. Example:
                 entry['params'][param_name] = val
             self._batch_chain_refresh_list()
 
-    def _batch_export_individual(self, files, shader_chain=None):
+    # --- Batch Image Navigation ---
+
+    def _batch_nav_prev(self):
+        """Navigate to the previous image in the batch set."""
+        if self._batch_index > 0:
+            self._batch_index -= 1
+            self._batch_nav_load_current()
+            self._batch_nav_update()
+
+    def _batch_nav_next(self):
+        """Navigate to the next image in the batch set."""
+        if self._batch_index < len(self._batch_files) - 1:
+            self._batch_index += 1
+            self._batch_nav_load_current()
+            self._batch_nav_update()
+
+    def _batch_nav_load_current(self):
+        """Load the current batch image into the canvas, replaying any bake chain."""
+        if not self._batch_files:
+            return
+
+        # Save paint surface for the image we're leaving
+        old_path = self.canvas.image_path
+        if old_path and self.canvas._paint_surface is not None:
+            self._batch_paint_cache[old_path] = self.canvas._paint_surface.copy()
+
+        path = self._batch_files[self._batch_index]
+        self.canvas.set_2d_mode()
+        self._light_container.hide()
+        self.mode_2d_btn.setEnabled(False)
+
+        # Save and temporarily clear bake chain so load_texture stores fresh original data
+        saved_chain = list(self.canvas._bake_chain)
+        self.canvas._bake_chain.clear()
+
+        # Save current tab before load — load_texture emits textureLoaded which
+        # triggers _on_image_loaded, switching to Markup. Batch navigation should
+        # not change the user's selected tab.
+        saved_tab = self.inspector_tabs.currentIndex()
+
+        if self.canvas.load_texture(path):
+            self._on_image_loaded(path)
+            self.inspector_tabs.setCurrentIndex(saved_tab)
+
+            # Restore the bake chain and replay it on the new image
+            self.canvas._bake_chain = saved_chain
+            if saved_chain:
+                self.canvas._replay_chain()
+                # Re-apply the user's currently selected shader for live preview
+                current_shader = self.shader_combo.currentText()
+                if current_shader and current_shader != "Original":
+                    self._on_shader_changed(current_shader)
+
+            # Restore cached paint surface for this image (if any)
+            if path in self._batch_paint_cache:
+                self.canvas._paint_surface = self._batch_paint_cache[path].copy()
+                self.canvas._commit_paint_surface()
+
+    def _batch_nav_update(self):
+        """Update the navigation label and button states."""
+        total = len(self._batch_files)
+        if total == 0:
+            self.batch_nav_bar.hide()
+            return
+        current = self._batch_index + 1
+        self.batch_nav_label.setText(f"Image {current} / {total}")
+        self.batch_prev_btn.setEnabled(self._batch_index > 0)
+        self.batch_next_btn.setEnabled(self._batch_index < total - 1)
+
+    def _batch_nav_process_all(self):
+        """Export all batch images using saved settings."""
+        if not self._batch_files:
+            return
+        settings = self._batch_export_settings
+        if not settings:
+            return
+        if settings.get('export_as_gif'):
+            self._batch_export_gif(self._batch_files, settings['gif_fps'], settings['gif_loop'])
+        else:
+            self._batch_export_individual(
+                self._batch_files,
+                settings.get('shader_chain'),
+                settings.get('output_format', 'png')
+            )
+
+    def _batch_nav_clear(self):
+        """Clear the batch file set and hide the navigation bar."""
+        self._batch_files = []
+        self._batch_index = 0
+        self._batch_export_settings = {}
+        self.batch_nav_bar.hide()
+
+    def _batch_export_individual(self, files, shader_chain=None, output_format='png'):
         """Export batch processed images as individual files.
         If shader_chain is provided and non-empty, applies shaders sequentially
         (multi-pass), feeding each pass's output as the next pass's input.
@@ -14982,9 +24349,13 @@ Only respond with valid JSON, no other text. Example:
 
                     # Save output
                     base = os.path.splitext(file_base)[0]
-                    output_path = os.path.join(output_dir, f"{base}_{chain_suffix}.png")
+                    ext_map = {'png': '.png', 'jpeg': '.jpg', 'webp': '.webp',
+                               'bmp': '.bmp', 'tiff': '.tiff', 'avif': '.avif',
+                               'exr': '.exr', 'hdr': '.hdr', 'ico': '.ico'}
+                    ext = ext_map.get(output_format, '.png')
+                    output_path = os.path.join(output_dir, f"{base}_{chain_suffix}{ext}")
                     img = Image.fromarray(image_data)
-                    img.save(output_path)
+                    self._save_image(img, output_path)
                     processed += 1
                     print(f"[BATCH] Saved: {output_path}")
 
@@ -15183,7 +24554,7 @@ Only respond with valid JSON, no other text. Example:
 
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self, "Save Upscaled Image", default,
-            "PNG (*.png);;JPEG (*.jpg)"
+            self._build_export_filters()
         )
         if not path:
             return
@@ -15205,7 +24576,7 @@ Only respond with valid JSON, no other text. Example:
 
             # Save
             img = Image.fromarray(upscaled)
-            img.save(path)
+            self._save_image(img, path)
 
             QtWidgets.QApplication.restoreOverrideCursor()
 
@@ -15233,10 +24604,15 @@ def main():
     fmt.setProfile(QtGui.QSurfaceFormat.OpenGLContextProfile.CoreProfile)
     QtGui.QSurfaceFormat.setDefaultFormat(fmt)
 
-    window = ShaderStudio()
-    window.show()
-
-    sys.exit(app.exec())
+    try:
+        window = ShaderStudio()
+        window.show()
+        sys.exit(app.exec())
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"\nFATAL: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
