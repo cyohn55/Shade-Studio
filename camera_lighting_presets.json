@@ -96,10 +96,10 @@
       "rotation_speed": 1.0
     },
     "Camera 3": {
-      "rotation_x": 16.0,
-      "rotation_y": 301.5,
+      "rotation_x": 15.5,
+      "rotation_y": 182.5,
       "rotation_z": 0.0,
-      "zoom": 39.89294979172533,
+      "zoom": 35.97294781834493,
       "pan_x": 0.0,
       "pan_y": 0.0,
       "fov": 45.0,

@@ -1,5 +1,5 @@
 """
-Shader Studio v2 - Professional shader tool with advanced features.
+Shade Studio v2 - Professional shader tool with advanced features.
 Features: 2D/3D rendering, custom presets, AI upscaling, video processing,
           node-based shader editor, LUT support, and more.
 """
@@ -16805,16 +16805,22 @@ class ParameterSlider(QtWidgets.QWidget):
         self.name = name
         self.props = props
 
+        # Ensure transparency so aurora shows through
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
+
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
 
         display_name = name.replace('_', ' ').title()
         self.label = QtWidgets.QLabel(f"{display_name}: {props['default']:.2f}")
-        self.label.setStyleSheet("color: #ccc; font-size: 11px;")
+        self.label.setStyleSheet("color: rgba(255,255,255,0.55); font-size: 11px; background: transparent;")
+        self.label.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
         layout.addWidget(self.label)
 
         self.slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.slider.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.slider.setRange(0, 1000)
         self.slider.setValue(self._value_to_slider(props['default']))
         self.slider.valueChanged.connect(self._on_change)
@@ -17004,7 +17010,7 @@ class ShaderEditorDialog(QtWidgets.QDialog):
 
         save_btn = QtWidgets.QPushButton("Save Shader")
         save_btn.clicked.connect(self.accept)
-        save_btn.setStyleSheet("background-color: #2d5a2d;")
+        save_btn.setStyleSheet("background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4);")
         btn_row.addWidget(save_btn)
 
         layout.addLayout(btn_row)
@@ -17204,19 +17210,19 @@ class AIModelDialog(QtWidgets.QDialog):
         self.setWindowTitle("Manage AI Models")
         self.resize(620, 420)
         self.setStyleSheet("""
-            QDialog { background-color: #2a2a2a; color: #ddd; }
-            QLabel { color: #ccc; font-size: 11px; }
+            QDialog { background-color: #2a2a2a; color: rgba(255,255,255,0.75); }
+            QLabel { color: rgba(255,255,255,0.6); font-size: 11px; }
             QLineEdit, QComboBox {
-                background-color: #1e1e1e; color: #ddd; border: 1px solid #444;
+                background-color: #1e1e1e; color: rgba(255,255,255,0.75); border: 1px solid #3a3a3c;
                 border-radius: 3px; padding: 4px 6px; font-size: 11px;
             }
             QListWidget {
-                background-color: #1e1e1e; color: #ddd; border: 1px solid #444;
+                background-color: #1e1e1e; color: rgba(255,255,255,0.75); border: 1px solid #3a3a3c;
                 font-size: 11px;
             }
-            QListWidget::item:selected { background-color: #3a4a5a; }
+            QListWidget::item:selected { background-color: #0A84FF; }
             QPushButton {
-                background-color: #353535; color: #ddd; border: 1px solid #444;
+                background-color: #353535; color: rgba(255,255,255,0.75); border: 1px solid #3a3a3c;
                 border-radius: 3px; padding: 5px 12px; font-size: 11px;
             }
             QPushButton:hover { background-color: #404040; }
@@ -17240,11 +17246,11 @@ class AIModelDialog(QtWidgets.QDialog):
 
         list_btns = QtWidgets.QHBoxLayout()
         add_btn = QtWidgets.QPushButton("+ Add")
-        add_btn.setStyleSheet("background-color: #3d5a3d;")
+        add_btn.setStyleSheet("background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4);")
         add_btn.clicked.connect(self._add_model)
         list_btns.addWidget(add_btn)
         remove_btn = QtWidgets.QPushButton("- Remove")
-        remove_btn.setStyleSheet("background-color: #5a3d3d;")
+        remove_btn.setStyleSheet("background-color: rgba(255, 69, 58, 0.3);")
         remove_btn.clicked.connect(self._remove_model)
         list_btns.addWidget(remove_btn)
         left.addLayout(list_btns)
@@ -17303,12 +17309,12 @@ class AIModelDialog(QtWidgets.QDialog):
         # Update / Test buttons
         update_row = QtWidgets.QHBoxLayout()
         update_btn = QtWidgets.QPushButton("Update Model")
-        update_btn.setStyleSheet("background-color: #4a6fa5; font-weight: bold;")
+        update_btn.setStyleSheet("background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4); font-weight: bold;")
         update_btn.clicked.connect(self._update_current)
         update_row.addWidget(update_btn)
 
         test_btn = QtWidgets.QPushButton("Test Connection")
-        test_btn.setStyleSheet("background-color: #3d5a3d;")
+        test_btn.setStyleSheet("background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4);")
         test_btn.clicked.connect(self._test_connection)
         update_row.addWidget(test_btn)
         right.addLayout(update_row)
@@ -17324,7 +17330,7 @@ class AIModelDialog(QtWidgets.QDialog):
         bottom_btns = QtWidgets.QHBoxLayout()
         bottom_btns.addStretch()
         save_btn = QtWidgets.QPushButton("Save && Close")
-        save_btn.setStyleSheet("background-color: #3d5a3d; font-weight: bold; padding: 6px 20px;")
+        save_btn.setStyleSheet("background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4); font-weight: bold; padding: 6px 20px;")
         save_btn.clicked.connect(self.accept)
         bottom_btns.addWidget(save_btn)
         cancel_btn = QtWidgets.QPushButton("Cancel")
@@ -17524,12 +17530,78 @@ class AIModelDialog(QtWidgets.QDialog):
         return dict(self._edits)
 
 
+class AuroraWidget(QtWidgets.QWidget):
+    """Animated aurora borealis background with smoothly shifting gradient blobs."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._colors = [
+            QtGui.QColor(10, 132, 255, 120),   # Blue
+            QtGui.QColor(48, 209, 88, 100),     # Green
+            QtGui.QColor(191, 90, 242, 100),    # Purple
+        ]
+        self._t = 0.0
+        self._speed = 0.008
+        self._enabled = True
+        self._timer = QtCore.QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(33)  # ~30fps
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    def set_colors(self, colors):
+        """Set aurora colors (list of QColor)."""
+        self._colors = colors
+        self.update()
+
+    def set_enabled(self, enabled):
+        self._enabled = enabled
+        if enabled:
+            self._timer.start(33)
+        else:
+            self._timer.stop()
+        self.update()
+
+    def _tick(self):
+        self._t += self._speed
+        self.update()
+
+    def paintEvent(self, event):
+        if not self._enabled or not self._colors:
+            return
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+
+        # Base dark fill
+        p.fillRect(0, 0, w, h, QtGui.QColor(28, 28, 30))
+
+        t = self._t
+        n = len(self._colors)
+        for i, color in enumerate(self._colors):
+            phase = t + i * 2.1
+            # Blobs biased toward top-right (where the inspector is)
+            # cx ranges ~0.55..0.95 of width, cy ranges ~0.05..0.45 of height
+            cx = w * (0.75 + 0.20 * math.sin(phase * 0.7 + i * 1.3))
+            cy = h * (0.25 + 0.20 * math.cos(phase * 0.5 + i * 0.9))
+            radius = max(w, h) * (0.35 + 0.15 * math.sin(phase * 0.3))
+
+            grad = QtGui.QRadialGradient(cx, cy, radius)
+            grad.setColorAt(0.0, color)
+            grad.setColorAt(0.5, QtGui.QColor(color.red(), color.green(), color.blue(), color.alpha() // 3))
+            grad.setColorAt(1.0, QtGui.QColor(color.red(), color.green(), color.blue(), 0))
+            p.setBrush(QtGui.QBrush(grad))
+            p.setPen(QtCore.Qt.PenStyle.NoPen)
+            p.drawEllipse(QtCore.QPointF(cx, cy), radius, radius)
+
+        p.end()
+
+
 class ShaderStudio(QtWidgets.QMainWindow):
     """Main application window."""
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Shader Studio")
+        self.setWindowTitle("Shade Studio")
         self.resize(1400, 900)
         self.param_widgets = {}
         self.current_params_cache = {}  # Cache params when switching shaders
@@ -17538,61 +17610,312 @@ class ShaderStudio(QtWidgets.QMainWindow):
         self._ai_chat_history = []  # Chat message history for AI tab
         self._ai_generated_shader_count = 0  # Counter for naming AI shaders
 
+        # Aurora background colors (user-configurable)
+        self._aurora_colors = [
+            QtGui.QColor(10, 132, 255, 120),   # Blue
+            QtGui.QColor(48, 209, 88, 100),     # Green
+            QtGui.QColor(191, 90, 242, 100),    # Purple
+        ]
+
         # Enable drag and drop
         self.setAcceptDrops(True)
 
-        # Dark theme
+        # Glassmorphism theme with translucent surfaces
         self.setStyleSheet("""
-            QMainWindow, QWidget { background-color: #1e1e1e; color: #ddd; }
+            * { font-family: "Segoe UI", system-ui, sans-serif; }
+            QMainWindow { background-color: transparent; color: #e5e5e7; }
+            QWidget { background-color: transparent; color: #e5e5e7; }
             QPushButton {
-                background-color: #3a3a3a; color: #fff;
-                border: 1px solid #555; padding: 6px 12px; border-radius: 4px;
+                background-color: rgba(255, 255, 255, 0.08);
+                color: #e5e5e7;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                padding: 6px 14px; border-radius: 8px;
+                font-size: 13px;
             }
-            QPushButton:hover { background-color: #4a4a4a; }
-            QPushButton:disabled { background-color: #2a2a2a; color: #666; }
+            QPushButton:hover {
+                background-color: rgba(255, 255, 255, 0.18);
+                border: 1px solid rgba(255, 255, 255, 0.25);
+            }
+            QPushButton:pressed {
+                background-color: rgba(255, 255, 255, 0.06);
+                border: 1px solid rgba(255, 255, 255, 0.10);
+            }
+            QPushButton:disabled {
+                background-color: rgba(255, 255, 255, 0.03);
+                color: rgba(255, 255, 255, 0.2);
+                border: 1px solid rgba(255, 255, 255, 0.05);
+            }
             QComboBox {
-                background-color: #2a2a2a; border: 1px solid #555;
-                padding: 5px; border-radius: 4px;
+                background-color: rgba(255, 255, 255, 0.08);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                padding: 6px 10px; border-radius: 8px; color: #e5e5e7;
+                font-size: 13px; min-height: 18px;
             }
-            QComboBox QAbstractItemView { background-color: #2a2a2a; }
+            QComboBox:hover {
+                background-color: rgba(255, 255, 255, 0.15);
+                border: 1px solid rgba(255, 255, 255, 0.22);
+            }
+            QComboBox::drop-down { border: none; width: 20px; }
+            QComboBox::down-arrow {
+                image: none; border: none;
+                width: 0; height: 0;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid rgba(255, 255, 255, 0.5);
+                margin-right: 8px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: rgba(255, 255, 255, 0.08);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 8px; padding: 4px;
+                selection-background-color: rgba(10, 132, 255, 0.85); color: #e5e5e7;
+                outline: none;
+            }
+            QComboBox QAbstractItemView::item {
+                color: #e5e5e7; padding: 6px 20px; border-radius: 6px;
+                border: none; outline: none;
+            }
+            QComboBox QAbstractItemView::item:selected,
+            QComboBox QAbstractItemView::item:hover {
+                background-color: rgba(10, 132, 255, 0.85); color: #ffffff;
+                border-radius: 6px; border: none; outline: none;
+            }
             QSlider::groove:horizontal {
-                border: 1px solid #555; height: 6px;
-                background: #2a2a2a; border-radius: 3px;
+                border: none; height: 4px;
+                background: rgba(255, 255, 255, 0.12); border-radius: 2px;
             }
             QSlider::handle:horizontal {
-                background: #5a9fff; width: 14px;
-                margin: -4px 0; border-radius: 7px;
+                background: qradialgradient(cx:0.5, cy:0.5, radius:0.5,
+                    fx:0.4, fy:0.4,
+                    stop:0 #ffffff, stop:0.8 #e0e0e0, stop:1 #cccccc);
+                width: 14px; height: 14px;
+                margin: -5px 0; border-radius: 7px;
+                border: 1px solid rgba(255, 255, 255, 0.3);
+            }
+            QSlider::handle:horizontal:hover {
+                background: qradialgradient(cx:0.5, cy:0.5, radius:0.5,
+                    fx:0.4, fy:0.4,
+                    stop:0 #5AC8FA, stop:0.8 #0A84FF, stop:1 #0070E0);
+                border: 1px solid rgba(10, 132, 255, 0.6);
+            }
+            QSlider::sub-page:horizontal {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 rgba(10, 132, 255, 0.9), stop:1 rgba(90, 200, 250, 0.7));
+                border-radius: 2px;
             }
             QGroupBox {
-                background-color: #252525; border: 1px solid #3a3a3a;
-                border-radius: 6px; margin-top: 10px; padding-top: 10px;
+                background-color: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 10px; margin-top: 8px; padding: 12px 8px 8px 8px;
             }
             QGroupBox::title {
-                subcontrol-origin: margin; padding: 0 5px; color: #888;
+                subcontrol-origin: margin; padding: 0 8px;
+                color: rgba(255, 255, 255, 0.5); font-size: 11px;
             }
-            QLabel { color: #ccc; }
-            QCheckBox { color: #ccc; }
+            QLabel { color: #e5e5e7; font-size: 13px; }
+            QCheckBox { color: #e5e5e7; font-size: 13px; }
+            QCheckBox::indicator {
+                width: 16px; height: 16px; border-radius: 4px;
+                border: 2px solid rgba(255, 255, 255, 0.25);
+                background: rgba(255, 255, 255, 0.05);
+            }
+            QCheckBox::indicator:hover {
+                border: 2px solid rgba(255, 255, 255, 0.4);
+                background: rgba(255, 255, 255, 0.1);
+            }
+            QCheckBox::indicator:checked {
+                background-color: #0A84FF; border-color: #0A84FF;
+            }
             QLineEdit, QTextEdit, QPlainTextEdit {
-                background-color: #2a2a2a; border: 1px solid #555;
-                padding: 5px; border-radius: 4px; color: #fff;
+                background-color: rgba(0, 0, 0, 0.15);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                padding: 6px 10px; border-radius: 8px; color: #e5e5e7;
+                font-size: 13px; selection-background-color: #0A84FF;
             }
-            QSplitter::handle { background-color: #3a3a3a; }
-            QSplitter::handle:horizontal { width: 3px; }
-            QMenuBar { background-color: #2a2a2a; color: #ddd; }
-            QMenuBar::item:selected { background-color: #4a4a4a; }
-            QMenu { background-color: #2a2a2a; color: #ddd; border: 1px solid #555; }
-            QMenu::item:selected { background-color: #4a4a4a; }
+            QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus {
+                border: 1px solid rgba(10, 132, 255, 0.6);
+            }
+            QSplitter::handle { background-color: rgba(255, 255, 255, 0.06); }
+            QSplitter::handle:horizontal { width: 2px; }
+            QSplitter::handle:vertical { height: 2px; }
+            QMenuBar {
+                background-color: rgba(28, 28, 30, 0.85); color: #e5e5e7;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+                padding: 2px 0; font-size: 13px;
+            }
+            QMenuBar::item {
+                padding: 4px 10px; border-radius: 6px;
+                background: transparent;
+            }
+            QMenuBar::item:selected {
+                background-color: rgba(255, 255, 255, 0.12);
+            }
+            QMenu {
+                background-color: rgba(30, 30, 32, 0.96); color: #e5e5e7;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 8px; padding: 4px; font-size: 13px;
+            }
+            QMenu::item { padding: 6px 20px; border-radius: 6px; }
+            QMenu::item:selected { background-color: rgba(10, 132, 255, 0.85); }
+            QMenu::separator {
+                height: 1px;
+                background: rgba(255, 255, 255, 0.1);
+                margin: 4px 8px;
+            }
             QToolTip {
-                background-color: #3a3a3a;
-                color: #ffffff;
-                border: 1px solid #555;
-                padding: 4px;
-                border-radius: 4px;
+                background-color: rgba(44, 44, 46, 0.92);
+                color: #e5e5e7;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                padding: 6px 10px; border-radius: 8px; font-size: 12px;
+            }
+            QSpinBox {
+                background-color: rgba(255, 255, 255, 0.08);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 6px;
+                padding: 3px 6px; color: #e5e5e7; font-size: 13px;
+            }
+            QSpinBox:hover {
+                background-color: rgba(255, 255, 255, 0.14);
+            }
+            QSpinBox::up-button, QSpinBox::down-button { border: none; width: 16px; }
+            QScrollBar:vertical {
+                background: transparent; width: 8px; margin: 0;
+            }
+            QScrollBar::handle:vertical {
+                background: rgba(255, 255, 255, 0.18); border-radius: 4px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: rgba(255, 255, 255, 0.3);
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: transparent; height: 0;
+            }
+            QScrollBar:horizontal {
+                background: transparent; height: 8px; margin: 0;
+            }
+            QScrollBar::handle:horizontal {
+                background: rgba(255, 255, 255, 0.18); border-radius: 4px;
+                min-width: 20px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background: rgba(255, 255, 255, 0.3);
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal,
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+                background: transparent; width: 0;
+            }
+            QListWidget {
+                background-color: rgba(0, 0, 0, 0.1);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 8px; font-size: 13px; padding: 4px;
+            }
+            QListWidget::item {
+                padding: 6px 8px; border-radius: 6px; border: none;
+            }
+            QListWidget::item:selected {
+                background-color: rgba(10, 132, 255, 0.8); color: #ffffff;
+            }
+            QListWidget::item:hover:!selected {
+                background-color: rgba(255, 255, 255, 0.08);
+            }
+            QTabWidget::pane {
+                border: none; background: transparent;
             }
         """)
 
-        # Create menu bar
+        # Frameless window for custom title bar
+        self.setWindowFlags(
+            QtCore.Qt.WindowType.FramelessWindowHint | QtCore.Qt.WindowType.Window
+        )
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
+        # Create menu bar (hidden default — we embed it in our title bar)
         self._create_menu_bar()
+        self.menuBar().setFixedHeight(0)
+        self.menuBar().hide()
+
+        # --- Custom title bar ---
+        self._title_bar = QtWidgets.QWidget()
+        self._title_bar.setFixedHeight(36)
+        self._title_bar.setStyleSheet(
+            "background-color: rgba(28, 28, 30, 0.92);"
+            "border-bottom: 1px solid rgba(255, 255, 255, 0.08);"
+            "border-top-left-radius: 10px; border-top-right-radius: 10px;"
+        )
+        tb_layout = QtWidgets.QHBoxLayout(self._title_bar)
+        tb_layout.setContentsMargins(10, 0, 0, 0)
+        tb_layout.setSpacing(0)
+
+        # Logo icon (diamond shape via unicode)
+        logo_label = QtWidgets.QLabel("◆")
+        logo_label.setFixedHeight(36)
+        logo_label.setStyleSheet("color: rgba(10, 132, 255, 0.9); font-size: 14px; padding: 6px 4px 6px 0; background: transparent;")
+        logo_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignVCenter)
+        tb_layout.addWidget(logo_label)
+
+        # App name
+        app_name = QtWidgets.QLabel("Shade Studio")
+        app_name.setFixedHeight(36)
+        app_name.setStyleSheet(
+            "color: #e5e5e7; font-size: 13px; font-weight: 600;"
+            "padding: 6px 10px 6px 2px; background: transparent;"
+        )
+        app_name.setAlignment(QtCore.Qt.AlignmentFlag.AlignVCenter)
+        tb_layout.addWidget(app_name)
+
+        # Embedded menu bar
+        self._custom_menubar = QtWidgets.QMenuBar()
+        self._custom_menubar.setStyleSheet("""
+            QMenuBar {
+                background: transparent; color: #e5e5e7;
+                padding: 0; font-size: 13px; border: none;
+            }
+            QMenuBar::item {
+                padding: 6px 10px; border-radius: 6px;
+                background: transparent; color: rgba(255, 255, 255, 0.7);
+            }
+            QMenuBar::item:selected {
+                background-color: rgba(255, 255, 255, 0.12); color: #e5e5e7;
+            }
+            QMenuBar::item:pressed {
+                background-color: rgba(255, 255, 255, 0.18);
+            }
+        """)
+        # Transfer menus from the native menu bar to our custom one
+        self._transfer_menus_to_custom_bar()
+        self._custom_menubar.setFixedHeight(36)
+        tb_layout.addWidget(self._custom_menubar)
+
+        tb_layout.addStretch()
+
+        # Window control buttons (minimize, maximize, close)
+        btn_style_base = (
+            "border: none; border-radius: 0; font-size: 13px;"
+            "padding: 0; min-width: 46px; min-height: 36px; max-height: 36px;"
+            "background: transparent; color: rgba(255, 255, 255, 0.7);"
+        )
+        btn_hover_normal = "QPushButton:hover { background-color: rgba(255, 255, 255, 0.1); }"
+        btn_hover_close = "QPushButton:hover { background-color: rgba(255, 69, 58, 0.9); color: #fff; }"
+
+        self._min_btn = QtWidgets.QPushButton("─")
+        self._min_btn.setStyleSheet(btn_style_base + btn_hover_normal)
+        self._min_btn.clicked.connect(self.showMinimized)
+        tb_layout.addWidget(self._min_btn)
+
+        self._max_btn = QtWidgets.QPushButton("□")
+        self._max_btn.setStyleSheet(btn_style_base + btn_hover_normal)
+        self._max_btn.clicked.connect(self._toggle_maximize)
+        tb_layout.addWidget(self._max_btn)
+
+        self._close_btn = QtWidgets.QPushButton("✕")
+        self._close_btn.setStyleSheet(btn_style_base + btn_hover_close)
+        self._close_btn.clicked.connect(self.close)
+        tb_layout.addWidget(self._close_btn)
+
+        # Drag state for title bar
+        self._drag_pos = None
 
         # Create main splitter for resizable panels
         self.main_splitter = QSplitter(QtCore.Qt.Orientation.Horizontal)
@@ -17602,62 +17925,24 @@ class ShaderStudio(QtWidgets.QMainWindow):
         left = QtWidgets.QVBoxLayout(left_widget)
         left.setContentsMargins(0, 0, 0, 0)
 
-        # Toolbar
-        toolbar = QtWidgets.QHBoxLayout()
+        # Toolbar removed — Load/Primitive/BG/Histogram/Mode moved to menus & inspector
 
-        # Load buttons
-        load_img_btn = QtWidgets.QPushButton("Load Image")
-        load_img_btn.clicked.connect(self.load_image)
-        load_img_btn.setStyleSheet("background-color: #3a6a9a;")
-        toolbar.addWidget(load_img_btn)
-
-        load_3d_btn = QtWidgets.QPushButton("Load 3D Model")
-        load_3d_btn.clicked.connect(self.load_3d_model)
-        load_3d_btn.setStyleSheet("background-color: #6a3a9a;")
-        toolbar.addWidget(load_3d_btn)
-
-        # Primitive shapes dropdown
+        # Hidden primitive combo (used by menu actions)
         self.primitive_combo = QtWidgets.QComboBox()
         self.primitive_combo.addItems(["Load Primitive...", "Cube", "Sphere"])
         self.primitive_combo.currentTextChanged.connect(self._load_primitive)
-        self.primitive_combo.setFixedWidth(120)
-        toolbar.addWidget(self.primitive_combo)
+        self.primitive_combo.hide()
 
-        # Background color picker
-        self.bg_color_btn = QtWidgets.QPushButton()
-        self.bg_color_btn.setFixedSize(26, 26)
-        self.bg_color_btn.setToolTip("Viewport Background Color")
-        self.bg_color_btn.setStyleSheet(
-            "background-color: #1f1f1f; border: 2px solid #555; border-radius: 3px;"
-        )
-        self.bg_color_btn.clicked.connect(self._pick_bg_color)
-        toolbar.addWidget(self.bg_color_btn)
-
-        toolbar.addStretch()
-
-        # Histogram toggle
-        self.hist_toggle_btn = QtWidgets.QPushButton("Histogram")
-        self.hist_toggle_btn.setCheckable(True)
-        self.hist_toggle_btn.setChecked(False)
-        self.hist_toggle_btn.setStyleSheet("font-size: 11px; padding: 3px 6px;")
-        self.hist_toggle_btn.clicked.connect(self._toggle_histogram)
-        toolbar.addWidget(self.hist_toggle_btn)
-
-        # 2D mode button
-        self.mode_2d_btn = QtWidgets.QPushButton("2D Mode")
-        self.mode_2d_btn.clicked.connect(self._switch_to_2d)
-        self.mode_2d_btn.setEnabled(False)
-        toolbar.addWidget(self.mode_2d_btn)
-
-        left.addLayout(toolbar)
+        # Histogram toggle state (no toolbar button; controlled from View menu)
+        self.hist_toggle_btn = None  # replaced by menu action
 
         # Paint tools toolbar — all tools in a flow layout that wraps on overflow
         self.paint_toolbar = QtWidgets.QWidget()
         paint_tb_flow = FlowLayout(self.paint_toolbar, margin=4, h_spacing=3, v_spacing=3)
 
-        tool_btn_style = "font-size: 13px; padding: 4px 8px; min-width: 30px;"
+        tool_btn_style = "font-size: 14px; padding: 6px 8px; min-width: 32px; border-radius: 8px;"
         self._tool_btn_style = tool_btn_style
-        self._tool_btn_active = "font-size: 13px; padding: 4px 8px; min-width: 30px; background-color: #5a9fff; color: #000;"
+        self._tool_btn_active = "font-size: 14px; padding: 6px 8px; min-width: 32px; border-radius: 8px; background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4);"
 
         self._tool_buttons = {}
 
@@ -17697,7 +17982,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
 
         # Deselect button at the end
         deselect_btn = QtWidgets.QPushButton("Deselect")
-        deselect_btn.setStyleSheet("font-size: 10px; padding: 3px 6px;")
+        deselect_btn.setStyleSheet("font-size: 11px; padding: 4px 10px;")
         deselect_btn.setToolTip("Clear selection (Ctrl+D)")
         deselect_btn.clicked.connect(self._deselect_all)
         paint_tb_flow.addWidget(deselect_btn)
@@ -17721,23 +18006,23 @@ class ShaderStudio(QtWidgets.QMainWindow):
 
         self.batch_prev_btn = QtWidgets.QPushButton("<")
         self.batch_prev_btn.setFixedWidth(30)
-        self.batch_prev_btn.setStyleSheet("font-weight: bold; font-size: 14px;")
+        self.batch_prev_btn.setStyleSheet("font-weight: 600; font-size: 14px;")
         self.batch_prev_btn.clicked.connect(self._batch_nav_prev)
         batch_nav_layout.addWidget(self.batch_prev_btn)
 
         self.batch_nav_label = QtWidgets.QLabel("0 / 0")
         self.batch_nav_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self.batch_nav_label.setStyleSheet("color: #ccc; font-size: 11px;")
+        self.batch_nav_label.setStyleSheet("color: #98989d; font-size: 11px;")
         batch_nav_layout.addWidget(self.batch_nav_label, 1)
 
         self.batch_next_btn = QtWidgets.QPushButton(">")
         self.batch_next_btn.setFixedWidth(30)
-        self.batch_next_btn.setStyleSheet("font-weight: bold; font-size: 14px;")
+        self.batch_next_btn.setStyleSheet("font-weight: 600; font-size: 14px;")
         self.batch_next_btn.clicked.connect(self._batch_nav_next)
         batch_nav_layout.addWidget(self.batch_next_btn)
 
         self.batch_process_btn = QtWidgets.QPushButton("Process All")
-        self.batch_process_btn.setStyleSheet("background-color: #2d5a5a; font-size: 11px; padding: 3px 8px;")
+        self.batch_process_btn.setStyleSheet("background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4); font-size: 11px; padding: 5px 12px; font-weight: 600;")
         self.batch_process_btn.clicked.connect(self._batch_nav_process_all)
         batch_nav_layout.addWidget(self.batch_process_btn)
 
@@ -17756,21 +18041,21 @@ class ShaderStudio(QtWidgets.QMainWindow):
 
         self.anim_prev_btn = QtWidgets.QPushButton("◀")
         self.anim_prev_btn.setFixedWidth(28)
-        self.anim_prev_btn.setStyleSheet("font-size: 12px; padding: 2px;")
+        self.anim_prev_btn.setStyleSheet("font-size: 12px; padding: 4px;")
         self.anim_prev_btn.setToolTip("Previous Frame")
         self.anim_prev_btn.clicked.connect(self._anim_prev_frame)
         anim_controls.addWidget(self.anim_prev_btn)
 
         self.anim_play_btn = QtWidgets.QPushButton("▶")
         self.anim_play_btn.setFixedWidth(28)
-        self.anim_play_btn.setStyleSheet("font-size: 12px; padding: 2px; background-color: #2d5a2d;")
+        self.anim_play_btn.setStyleSheet("font-size: 12px; padding: 4px; background-color: rgba(48, 209, 88, 0.7); color: #fff; border: 1px solid rgba(48, 209, 88, 0.4);")
         self.anim_play_btn.setToolTip("Play / Pause")
         self.anim_play_btn.clicked.connect(self._toggle_anim_playback)
         anim_controls.addWidget(self.anim_play_btn)
 
         self.anim_next_btn = QtWidgets.QPushButton("▶|")
         self.anim_next_btn.setFixedWidth(28)
-        self.anim_next_btn.setStyleSheet("font-size: 12px; padding: 2px;")
+        self.anim_next_btn.setStyleSheet("font-size: 12px; padding: 4px;")
         self.anim_next_btn.setToolTip("Next Frame")
         self.anim_next_btn.clicked.connect(self._anim_next_frame)
         anim_controls.addWidget(self.anim_next_btn)
@@ -17790,7 +18075,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         anim_controls.addSpacing(6)
 
         self.anim_onion_cb = QtWidgets.QCheckBox("Onion")
-        self.anim_onion_cb.setStyleSheet("font-size: 10px; color: #aaa;")
+        self.anim_onion_cb.setStyleSheet("font-size: 11px; color: #98989d;")
         self.anim_onion_cb.setToolTip("Onion Skin (show previous/next frames)")
         self.anim_onion_cb.toggled.connect(self._on_onion_skin_toggled)
         anim_controls.addWidget(self.anim_onion_cb)
@@ -17799,21 +18084,21 @@ class ShaderStudio(QtWidgets.QMainWindow):
 
         self.anim_add_btn = QtWidgets.QPushButton("+")
         self.anim_add_btn.setFixedWidth(24)
-        self.anim_add_btn.setStyleSheet("font-size: 13px; padding: 1px; background-color: #2d5a2d;")
+        self.anim_add_btn.setStyleSheet("font-size: 13px; padding: 3px; background-color: rgba(48, 209, 88, 0.7); color: #fff; border: 1px solid rgba(48, 209, 88, 0.4);")
         self.anim_add_btn.setToolTip("Add Frame")
         self.anim_add_btn.clicked.connect(self._add_anim_frame)
         anim_controls.addWidget(self.anim_add_btn)
 
         self.anim_dup_btn = QtWidgets.QPushButton("⧉")
         self.anim_dup_btn.setFixedWidth(24)
-        self.anim_dup_btn.setStyleSheet("font-size: 13px; padding: 1px;")
+        self.anim_dup_btn.setStyleSheet("font-size: 13px; padding: 3px;")
         self.anim_dup_btn.setToolTip("Duplicate Frame")
         self.anim_dup_btn.clicked.connect(self._dup_anim_frame)
         anim_controls.addWidget(self.anim_dup_btn)
 
         self.anim_del_btn = QtWidgets.QPushButton("−")
         self.anim_del_btn.setFixedWidth(24)
-        self.anim_del_btn.setStyleSheet("font-size: 13px; padding: 1px; background-color: #5a2d2d;")
+        self.anim_del_btn.setStyleSheet("font-size: 13px; padding: 3px; background-color: rgba(255, 69, 58, 0.6); color: #fff; border: 1px solid rgba(255, 69, 58, 0.3);")
         self.anim_del_btn.setToolTip("Delete Frame")
         self.anim_del_btn.clicked.connect(self._del_anim_frame)
         anim_controls.addWidget(self.anim_del_btn)
@@ -17827,9 +18112,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         frame_strip_scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         frame_strip_scroll.setFixedHeight(36)
         frame_strip_scroll.setStyleSheet("""
-            QScrollArea { border: 1px solid #444; background: #1e1e1e; }
-            QScrollBar:horizontal { height: 8px; background: #1e1e1e; }
-            QScrollBar::handle:horizontal { background: #555; border-radius: 4px; }
+            QScrollArea { border: none; background: transparent; border-radius: 8px; }
         """)
         self._frame_strip_container = QtWidgets.QWidget()
         self._frame_strip_layout = QtWidgets.QHBoxLayout(self._frame_strip_container)
@@ -17841,7 +18124,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
 
         # Frame info label
         self.anim_frame_label = QtWidgets.QLabel("Frame 1 / 1")
-        self.anim_frame_label.setStyleSheet("color: #888; font-size: 10px;")
+        self.anim_frame_label.setStyleSheet("color: #98989d; font-size: 11px;")
         self.anim_frame_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         anim_main_layout.addWidget(self.anim_frame_label)
 
@@ -17868,18 +18151,51 @@ class ShaderStudio(QtWidgets.QMainWindow):
         inspector = QtWidgets.QWidget()
         inspector.setMinimumWidth(280)
         inspector.setMaximumWidth(500)
-        inspector.setStyleSheet("background-color: #252525; border-left: 1px solid #333;")
+        inspector.setStyleSheet("background-color: rgba(20, 20, 22, 0.45); border-left: 1px solid rgba(255, 255, 255, 0.1);")
         insp_layout = QtWidgets.QVBoxLayout(inspector)
-        insp_layout.setContentsMargins(10, 10, 10, 10)
+        insp_layout.setContentsMargins(6, 8, 6, 6)
+        insp_layout.setSpacing(6)
 
-        # Title
-        title = QtWidgets.QLabel("Shaders")
-        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #fff;")
-        insp_layout.addWidget(title)
+        # --- Mode buttons + BG color row at top of inspector ---
+        mode_row = QtWidgets.QHBoxLayout()
+        mode_row.setContentsMargins(0, 0, 0, 0)
+        mode_row.setSpacing(4)
+
+        self.mode_2d_btn = QtWidgets.QPushButton("2D Mode")
+        self.mode_2d_btn.setCheckable(True)
+        self.mode_2d_btn.setChecked(True)
+        self.mode_2d_btn.setStyleSheet(
+            "font-size: 11px; padding: 5px 12px; border-radius: 8px; font-weight: 500;"
+        )
+        self.mode_2d_btn.clicked.connect(self._switch_to_2d)
+        mode_row.addWidget(self.mode_2d_btn)
+
+        self.mode_3d_btn = QtWidgets.QPushButton("3D Mode")
+        self.mode_3d_btn.setCheckable(True)
+        self.mode_3d_btn.setChecked(False)
+        self.mode_3d_btn.setStyleSheet(
+            "font-size: 11px; padding: 5px 12px; border-radius: 8px; font-weight: 500;"
+        )
+        self.mode_3d_btn.clicked.connect(self._switch_to_3d)
+        mode_row.addWidget(self.mode_3d_btn)
+
+        mode_row.addStretch()
+
+        # Background color picker
+        self.bg_color_btn = QtWidgets.QPushButton()
+        self.bg_color_btn.setFixedSize(26, 26)
+        self.bg_color_btn.setToolTip("Viewport Background Color")
+        self.bg_color_btn.setStyleSheet(
+            "background-color: #1f1f1f; border: 2px solid rgba(255,255,255,0.2); border-radius: 8px;"
+        )
+        self.bg_color_btn.clicked.connect(self._pick_bg_color)
+        mode_row.addWidget(self.bg_color_btn)
+
+        insp_layout.addLayout(mode_row)
 
         # Image info
         self.image_info = QtWidgets.QLabel("No image loaded")
-        self.image_info.setStyleSheet("color: #888; font-size: 11px;")
+        self.image_info.setStyleSheet("color: #98989d; font-size: 11px;")
         insp_layout.addWidget(self.image_info)
 
         # GIF Controls (hidden by default)
@@ -17902,7 +18218,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
 
         self.gif_frame_label = QtWidgets.QLabel("0/0")
         self.gif_frame_label.setFixedWidth(50)
-        self.gif_frame_label.setStyleSheet("color: #888; font-size: 10px;")
+        self.gif_frame_label.setStyleSheet("color: #98989d; font-size: 11px;")
         gif_layout.addWidget(self.gif_frame_label)
 
         self.gif_controls.hide()
@@ -17911,11 +18227,24 @@ class ShaderStudio(QtWidgets.QMainWindow):
         # --- Tab system: Inspector + Layers ---
         self.inspector_tabs = QtWidgets.QTabWidget()
         self.inspector_tabs.setStyleSheet("""
-            QTabWidget::pane { border: 1px solid #444; background: #252525; }
-            QTabBar::tab { background: #2a2a2a; color: #aaa; padding: 6px 16px;
-                           border: 1px solid #444; border-bottom: none; font-size: 11px; }
-            QTabBar::tab:selected { background: #353535; color: #fff; }
-            QTabBar::tab:hover { background: #333; }
+            QTabWidget::pane { border: none; background: transparent; }
+            QTabBar {
+                background: rgba(255, 255, 255, 0.06); border-radius: 10px;
+                padding: 2px; margin: 0 2px 6px 2px;
+            }
+            QTabBar::tab {
+                background: transparent; color: rgba(255, 255, 255, 0.45);
+                padding: 5px 10px; border: none; border-radius: 8px;
+                font-size: 11px; font-weight: 500; min-width: 30px;
+            }
+            QTabBar::tab:selected {
+                background: rgba(10, 132, 255, 0.85); color: #ffffff;
+                font-weight: 600;
+            }
+            QTabBar::tab:hover:!selected {
+                background: rgba(255, 255, 255, 0.08);
+                color: rgba(255, 255, 255, 0.7);
+            }
         """)
         insp_layout.addWidget(self.inspector_tabs, 1)
 
@@ -17923,7 +18252,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         inspector_tab = QtWidgets.QWidget()
         insp_tab_scroll = QtWidgets.QScrollArea()
         insp_tab_scroll.setWidgetResizable(True)
-        insp_tab_scroll.setStyleSheet("QScrollArea { border: none; background: #252525; }")
+        insp_tab_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         insp_tab_scroll.setWidget(inspector_tab)
         insp_tab_layout = QtWidgets.QVBoxLayout(inspector_tab)
         insp_tab_layout.setContentsMargins(5, 5, 5, 5)
@@ -17953,17 +18282,17 @@ class ShaderStudio(QtWidgets.QMainWindow):
         # Description
         self.description = QtWidgets.QLabel("")
         self.description.setWordWrap(True)
-        self.description.setStyleSheet("color: #888; font-style: italic; padding: 5px 0;")
+        self.description.setStyleSheet("color: rgba(255,255,255,0.4); font-style: italic; padding: 5px 0; background: transparent;")
         insp_tab_layout.addWidget(self.description)
 
         # Parameters section
         params_label = QtWidgets.QLabel("Parameters")
-        params_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #fff;")
+        params_label.setStyleSheet("font-size: 13px; font-weight: 600; color: #e5e5e7;")
         insp_tab_layout.addWidget(params_label)
 
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; }")
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         self.params_widget = QtWidgets.QWidget()
         self.params_layout = QtWidgets.QVBoxLayout(self.params_widget)
         self.params_layout.setContentsMargins(0, 0, 0, 0)
@@ -17974,10 +18303,12 @@ class ShaderStudio(QtWidgets.QMainWindow):
         # --- Lighting Controls (3D mode only) ---
         self._lighting_group = QtWidgets.QGroupBox("Lighting")
         self._lighting_group.setStyleSheet("""
-            QGroupBox { font-size: 12px; font-weight: bold; color: #ddd;
-                        border: 1px solid #555; border-radius: 4px;
-                        margin-top: 6px; padding-top: 14px; }
-            QGroupBox::title { subcontrol-origin: margin; left: 8px; }
+            QGroupBox { font-size: 13px; font-weight: 600; color: #e5e5e7;
+                        border: 1px solid rgba(255, 255, 255, 0.08);
+                        border-radius: 10px; background-color: rgba(255, 255, 255, 0.05);
+                        margin-top: 6px; padding: 14px 8px 8px 8px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 8px;
+                               color: rgba(255, 255, 255, 0.45); }
         """)
         self._light_controls_layout = QtWidgets.QVBoxLayout(self._lighting_group)
         self._light_controls_layout.setContentsMargins(4, 4, 4, 4)
@@ -17987,18 +18318,18 @@ class ShaderStudio(QtWidgets.QMainWindow):
         # Lighting group visibility is managed by _light_container (created later)
         # Lighting group is added to the Cameras & Lighting tab (not here)
 
-        compact_btn = "font-size: 11px; padding: 3px 6px;"
+        compact_btn = "font-size: 12px; padding: 5px 12px; border-radius: 8px; font-weight: 500;"
 
         # Preset management buttons
         preset_btns = QtWidgets.QHBoxLayout()
         preset_btns.setSpacing(4)
         save_preset_btn = QtWidgets.QPushButton("Save Preset")
         save_preset_btn.clicked.connect(self._save_preset)
-        save_preset_btn.setStyleSheet(f"background-color: #5a5a2d; {compact_btn}")
+        save_preset_btn.setStyleSheet(f"background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4); {compact_btn}")
         preset_btns.addWidget(save_preset_btn)
         delete_preset_btn = QtWidgets.QPushButton("Delete Preset")
         delete_preset_btn.clicked.connect(self._delete_preset)
-        delete_preset_btn.setStyleSheet(f"background-color: #5a2d2d; {compact_btn}")
+        delete_preset_btn.setStyleSheet(f"color: #FF453A; {compact_btn}")
         preset_btns.addWidget(delete_preset_btn)
         reset_btn = QtWidgets.QPushButton("Reset")
         reset_btn.clicked.connect(self._reset_params)
@@ -18012,35 +18343,35 @@ class ShaderStudio(QtWidgets.QMainWindow):
         export_row.setSpacing(4)
         export_btn = QtWidgets.QPushButton("Export")
         export_btn.clicked.connect(self.export_image)
-        export_btn.setStyleSheet(f"background-color: #2d5a2d; {compact_btn}")
+        export_btn.setStyleSheet(f"background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4); {compact_btn}")
         export_row.addWidget(export_btn)
         batch_btn = QtWidgets.QPushButton("Batch")
         batch_btn.clicked.connect(self.batch_process)
-        batch_btn.setStyleSheet(f"background-color: #2d5a5a; {compact_btn}")
+        batch_btn.setStyleSheet(compact_btn)
         export_row.addWidget(batch_btn)
         upscale_btn = QtWidgets.QPushButton("Upscale")
         upscale_btn.clicked.connect(self.upscale_image)
-        upscale_btn.setStyleSheet(f"background-color: #5a2d5a; {compact_btn}")
+        upscale_btn.setStyleSheet(compact_btn)
         export_row.addWidget(upscale_btn)
         insp_tab_layout.addLayout(export_row)
 
         # Bake / Undo / Redo
         bake_sep = QtWidgets.QFrame()
         bake_sep.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        bake_sep.setStyleSheet("background-color: #444;")
+        bake_sep.setStyleSheet("background-color: rgba(255, 255, 255, 0.08); max-height: 1px;")
         insp_tab_layout.addWidget(bake_sep)
 
-        tiny_btn = "font-size: 11px; padding: 2px 4px;"
+        tiny_btn = "font-size: 11px; padding: 4px 8px; border-radius: 6px;"
         bake_row = QtWidgets.QHBoxLayout()
         bake_row.setSpacing(3)
         self.bake_pass_btn = QtWidgets.QPushButton("Add Layer")
         self.bake_pass_btn.clicked.connect(self._add_layer)
-        self.bake_pass_btn.setStyleSheet(f"background-color: #5a4a2d; {tiny_btn}")
+        self.bake_pass_btn.setStyleSheet(f"background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4); {tiny_btn}")
         self.bake_pass_btn.setToolTip("Add current shader as a new layer")
         bake_row.addWidget(self.bake_pass_btn)
         self.reset_chain_btn = QtWidgets.QPushButton("Reset")
         self.reset_chain_btn.clicked.connect(self._reset_chain)
-        self.reset_chain_btn.setStyleSheet(f"background-color: #5a2d2d; {tiny_btn}")
+        self.reset_chain_btn.setStyleSheet(f"color: #FF453A; {tiny_btn}")
         self.reset_chain_btn.setToolTip("Reset — Reload original image and clear all layers")
         bake_row.addWidget(self.reset_chain_btn)
         self.undo_btn = QtWidgets.QPushButton("Undo")
@@ -18091,7 +18422,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
 
         self.color_display = QtWidgets.QLabel("")
         self.color_display.setFixedHeight(30)
-        self.color_display.setStyleSheet("background-color: #333; border: 1px solid #555; border-radius: 4px;")
+        self.color_display.setStyleSheet("background-color: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px;")
         self.color_display.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.color_display.hide()
         insp_tab_layout.addWidget(self.color_display)
@@ -18099,7 +18430,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         # Paint Tool Options
         paint_sep = QtWidgets.QFrame()
         paint_sep.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        paint_sep.setStyleSheet("background-color: #444;")
+        paint_sep.setStyleSheet("background-color: rgba(255, 255, 255, 0.08); max-height: 1px;")
         self._paint_options_widget = QtWidgets.QWidget()
         paint_opts_layout = QtWidgets.QVBoxLayout(self._paint_options_widget)
         paint_opts_layout.setContentsMargins(0, 4, 0, 4)
@@ -18107,7 +18438,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         color_row = QtWidgets.QHBoxLayout()
         color_row.addWidget(QtWidgets.QLabel("Color:"))
         self._paint_color_btn = QtWidgets.QPushButton("")
-        self._paint_color_btn.setStyleSheet("background-color: rgb(255, 0, 0); border: 2px solid #888; min-height: 24px;")
+        self._paint_color_btn.setStyleSheet("background-color: rgb(255, 0, 0); border: 2px solid rgba(255,255,255,0.2); border-radius: 8px; min-height: 24px;")
         self._paint_color_btn.setToolTip("Click to pick paint color")
         self._paint_color_btn.clicked.connect(self._pick_paint_color)
         color_row.addWidget(self._paint_color_btn)
@@ -18148,7 +18479,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
                               ("tetradic", "Tetrad")]:
             hbtn = QtWidgets.QPushButton(label)
             hbtn.setFixedHeight(18)
-            hbtn.setStyleSheet("font-size: 9px; padding: 1px 3px;")
+            hbtn.setStyleSheet("font-size: 10px; padding: 2px 4px; border-radius: 4px;")
             hbtn.setToolTip(f"Generate {htype} harmony colors")
             hbtn.clicked.connect(lambda checked, ht=htype: self._generate_harmony(ht))
             harmony_row.addWidget(hbtn)
@@ -18164,7 +18495,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         size_row.addWidget(self._brush_size_slider)
         self._brush_size_label = QtWidgets.QLabel("7px")
         self._brush_size_label.setFixedWidth(30)
-        self._brush_size_label.setStyleSheet("color: #aaa; font-size: 10px;")
+        self._brush_size_label.setStyleSheet("color: rgba(255,255,255,0.5); font-size: 10px;")
         size_row.addWidget(self._brush_size_label)
         paint_opts_layout.addLayout(size_row)
         opacity_row = QtWidgets.QHBoxLayout()
@@ -18177,7 +18508,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         opacity_row.addWidget(self._opacity_slider)
         self._opacity_label = QtWidgets.QLabel("255")
         self._opacity_label.setFixedWidth(30)
-        self._opacity_label.setStyleSheet("color: #aaa; font-size: 10px;")
+        self._opacity_label.setStyleSheet("color: rgba(255,255,255,0.5); font-size: 10px;")
         opacity_row.addWidget(self._opacity_label)
         paint_opts_layout.addLayout(opacity_row)
 
@@ -18187,12 +18518,12 @@ class ShaderStudio(QtWidgets.QMainWindow):
         pressure_layout.setContentsMargins(0, 0, 0, 0)
         self._pressure_size_cb = QtWidgets.QCheckBox("P→Size")
         self._pressure_size_cb.setChecked(True)
-        self._pressure_size_cb.setStyleSheet("font-size: 10px; color: #aaa;")
+        self._pressure_size_cb.setStyleSheet("font-size: 10px; color: rgba(255,255,255,0.5);")
         self._pressure_size_cb.toggled.connect(lambda v: setattr(self.canvas, '_pressure_affects_size', v))
         pressure_layout.addWidget(self._pressure_size_cb)
         self._pressure_opacity_cb = QtWidgets.QCheckBox("P→Opacity")
         self._pressure_opacity_cb.setChecked(True)
-        self._pressure_opacity_cb.setStyleSheet("font-size: 10px; color: #aaa;")
+        self._pressure_opacity_cb.setStyleSheet("font-size: 10px; color: rgba(255,255,255,0.5);")
         self._pressure_opacity_cb.toggled.connect(lambda v: setattr(self.canvas, '_pressure_affects_opacity', v))
         pressure_layout.addWidget(self._pressure_opacity_cb)
         paint_opts_layout.addWidget(self._pressure_row)
@@ -18209,7 +18540,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         tol_layout.addWidget(self._tolerance_slider)
         self._tolerance_label = QtWidgets.QLabel("32")
         self._tolerance_label.setFixedWidth(30)
-        self._tolerance_label.setStyleSheet("color: #aaa; font-size: 10px;")
+        self._tolerance_label.setStyleSheet("color: rgba(255,255,255,0.5); font-size: 10px;")
         tol_layout.addWidget(self._tolerance_label)
         self._tolerance_row.hide()
         paint_opts_layout.addWidget(self._tolerance_row)
@@ -18237,7 +18568,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         hard_layout.addWidget(self._hardness_slider)
         self._hardness_label = QtWidgets.QLabel("100%")
         self._hardness_label.setFixedWidth(35)
-        self._hardness_label.setStyleSheet("color: #aaa; font-size: 10px;")
+        self._hardness_label.setStyleSheet("color: rgba(255,255,255,0.5); font-size: 10px;")
         hard_layout.addWidget(self._hardness_label)
         self._hardness_row.hide()
         paint_opts_layout.addWidget(self._hardness_row)
@@ -18267,7 +18598,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         spac_layout.addWidget(self._spacing_slider)
         self._spacing_label = QtWidgets.QLabel("25%")
         self._spacing_label.setFixedWidth(35)
-        self._spacing_label.setStyleSheet("color: #aaa; font-size: 10px;")
+        self._spacing_label.setStyleSheet("color: rgba(255,255,255,0.5); font-size: 10px;")
         spac_layout.addWidget(self._spacing_label)
         self._spacing_row.hide()
         paint_opts_layout.addWidget(self._spacing_row)
@@ -18285,7 +18616,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         scat_layout.addWidget(self._scatter_slider)
         self._scatter_label = QtWidgets.QLabel("0%")
         self._scatter_label.setFixedWidth(35)
-        self._scatter_label.setStyleSheet("color: #aaa; font-size: 10px;")
+        self._scatter_label.setStyleSheet("color: rgba(255,255,255,0.5); font-size: 10px;")
         scat_layout.addWidget(self._scatter_label)
         self._scatter_row.hide()
         paint_opts_layout.addWidget(self._scatter_row)
@@ -18329,7 +18660,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         self._blur_strength_slider.valueChanged.connect(self._on_blur_strength_changed)
         blur_layout.addWidget(self._blur_strength_slider)
         self._sharpen_toggle = QtWidgets.QCheckBox("Sharpen")
-        self._sharpen_toggle.setStyleSheet("font-size: 10px; color: #aaa;")
+        self._sharpen_toggle.setStyleSheet("font-size: 10px; color: rgba(255,255,255,0.5);")
         self._sharpen_toggle.toggled.connect(lambda v: setattr(self.canvas, '_sharpen_mode', v))
         blur_layout.addWidget(self._sharpen_toggle)
         self._blur_row.hide()
@@ -18399,7 +18730,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
             lambda v: setattr(self.canvas, '_pen_stroke_width', float(v)))
         pen_layout.addWidget(self._pen_width_slider)
         self._pen_closed_cb = QtWidgets.QCheckBox("Closed")
-        self._pen_closed_cb.setStyleSheet("font-size: 10px; color: #aaa;")
+        self._pen_closed_cb.setStyleSheet("font-size: 10px; color: rgba(255,255,255,0.5);")
         self._pen_closed_cb.toggled.connect(
             lambda v: setattr(self.canvas, '_pen_closed', v))
         pen_layout.addWidget(self._pen_closed_cb)
@@ -18422,7 +18753,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         text_input_row = QtWidgets.QHBoxLayout()
         text_input_row.addWidget(QtWidgets.QLabel("Text:"))
         self._text_input = QtWidgets.QLineEdit("Text")
-        self._text_input.setStyleSheet("background-color: #1e1e1e; color: #ddd; font-size: 11px; padding: 2px;")
+        self._text_input.setStyleSheet("background-color: rgba(0,0,0,0.12); color: #e5e5e7; font-size: 11px; padding: 2px; border-radius: 6px;")
         self._text_input.textChanged.connect(lambda t: setattr(self.canvas, '_text_content', t))
         text_input_row.addWidget(self._text_input)
         text_layout.addLayout(text_input_row)
@@ -18456,7 +18787,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         self._polygon_sides_spin.valueChanged.connect(lambda v: setattr(self.canvas, '_polygon_sides', v))
         poly_layout.addWidget(self._polygon_sides_spin)
         self._star_toggle = QtWidgets.QCheckBox("Star")
-        self._star_toggle.setStyleSheet("font-size: 10px; color: #aaa;")
+        self._star_toggle.setStyleSheet("font-size: 10px; color: rgba(255,255,255,0.5);")
         self._star_toggle.toggled.connect(lambda v: setattr(self.canvas, '_polygon_star', v))
         poly_layout.addWidget(self._star_toggle)
         self._inner_ratio_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
@@ -18524,7 +18855,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         sym_layout = QtWidgets.QHBoxLayout(self._symmetry_row)
         sym_layout.setContentsMargins(0, 0, 0, 0)
         self._symmetry_toggle = QtWidgets.QCheckBox("Symmetry")
-        self._symmetry_toggle.setStyleSheet("font-size: 10px; color: #aaa;")
+        self._symmetry_toggle.setStyleSheet("font-size: 10px; color: rgba(255,255,255,0.5);")
         self._symmetry_toggle.toggled.connect(lambda v: setattr(self.canvas, '_symmetry_enabled', v))
         sym_layout.addWidget(self._symmetry_toggle)
         self._symmetry_axis_combo = QtWidgets.QComboBox()
@@ -18547,7 +18878,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         stab_layout = QtWidgets.QHBoxLayout(self._stabilizer_row)
         stab_layout.setContentsMargins(0, 0, 0, 0)
         self._stabilizer_toggle = QtWidgets.QCheckBox("Stabilizer")
-        self._stabilizer_toggle.setStyleSheet("font-size: 10px; color: #aaa;")
+        self._stabilizer_toggle.setStyleSheet("font-size: 10px; color: rgba(255,255,255,0.5);")
         self._stabilizer_toggle.toggled.connect(lambda v: setattr(self.canvas, '_stabilizer_enabled', v))
         stab_layout.addWidget(self._stabilizer_toggle)
         self._stabilizer_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
@@ -18594,7 +18925,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         # --- Perspective / Isometric guides ---
         guide_sep = QtWidgets.QFrame()
         guide_sep.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        guide_sep.setStyleSheet("background-color: #444;")
+        guide_sep.setStyleSheet("background-color: rgba(255, 255, 255, 0.08);")
         paint_opts_layout.addWidget(guide_sep)
         guide_row = QtWidgets.QHBoxLayout()
         guide_row.addWidget(QtWidgets.QLabel("Guides:"))
@@ -18615,7 +18946,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         load_brush_btn.clicked.connect(self._load_custom_brush)
         custom_brush_row.addWidget(load_brush_btn)
         self._custom_brush_label = QtWidgets.QLabel("Default")
-        self._custom_brush_label.setStyleSheet("color: #aaa; font-size: 10px;")
+        self._custom_brush_label.setStyleSheet("color: rgba(255,255,255,0.5); font-size: 10px;")
         custom_brush_row.addWidget(self._custom_brush_label)
         paint_opts_layout.addLayout(custom_brush_row)
 
@@ -18676,7 +19007,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         textures_tab = QtWidgets.QWidget()
         tex_scroll = QtWidgets.QScrollArea()
         tex_scroll.setWidgetResizable(True)
-        tex_scroll.setStyleSheet("QScrollArea { border: none; background: #252525; }")
+        tex_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         tex_scroll.setWidget(textures_tab)
         tex_layout = QtWidgets.QVBoxLayout(textures_tab)
         tex_layout.setContentsMargins(8, 8, 8, 8)
@@ -18684,17 +19015,16 @@ class ShaderStudio(QtWidgets.QMainWindow):
 
         # -- Procedural Textures Section --
         tex_proc_lbl = QtWidgets.QLabel("Procedural Textures")
-        tex_proc_lbl.setStyleSheet("font-weight: bold; font-size: 12px; color: #ddd; margin-bottom: 2px;")
+        tex_proc_lbl.setStyleSheet("font-weight: 600; font-size: 13px; color: #e5e5e7; margin-bottom: 4px;")
         tex_layout.addWidget(tex_proc_lbl)
 
         # Material selector
         mat_row = QtWidgets.QHBoxLayout()
         mat_row.setSpacing(4)
         mat_lbl = QtWidgets.QLabel("Material:")
-        mat_lbl.setStyleSheet("font-size: 11px; color: #ccc;")
+        mat_lbl.setStyleSheet("font-size: 11px; color: #98989d;")
         mat_lbl.setFixedWidth(62)
         self._tex_material_combo = QtWidgets.QComboBox()
-        self._tex_material_combo.setStyleSheet("font-size: 11px; background: #333; color: #ddd; padding: 2px;")
         self._tex_material_combo.addItem("0: Default Material")
         mat_row.addWidget(mat_lbl)
         mat_row.addWidget(self._tex_material_combo, 1)
@@ -18704,10 +19034,9 @@ class ShaderStudio(QtWidgets.QMainWindow):
         type_row = QtWidgets.QHBoxLayout()
         type_row.setSpacing(4)
         type_lbl = QtWidgets.QLabel("Type:")
-        type_lbl.setStyleSheet("font-size: 11px; color: #ccc;")
+        type_lbl.setStyleSheet("font-size: 11px; color: #98989d;")
         type_lbl.setFixedWidth(62)
         self._tex_type_combo = QtWidgets.QComboBox()
-        self._tex_type_combo.setStyleSheet("font-size: 11px; background: #333; color: #ddd; padding: 2px;")
         for name in PROCEDURAL_TEXTURES:
             self._tex_type_combo.addItem(name)
         self._tex_type_combo.currentIndexChanged.connect(self._on_tex_type_changed)
@@ -18719,10 +19048,9 @@ class ShaderStudio(QtWidgets.QMainWindow):
         res_row = QtWidgets.QHBoxLayout()
         res_row.setSpacing(4)
         res_lbl = QtWidgets.QLabel("Resolution:")
-        res_lbl.setStyleSheet("font-size: 11px; color: #ccc;")
+        res_lbl.setStyleSheet("font-size: 11px; color: #98989d;")
         res_lbl.setFixedWidth(62)
         self._tex_resolution_combo = QtWidgets.QComboBox()
-        self._tex_resolution_combo.setStyleSheet("font-size: 11px; background: #333; color: #ddd; padding: 2px;")
         for r in ["256", "512", "1024", "2048"]:
             self._tex_resolution_combo.addItem(r)
         self._tex_resolution_combo.setCurrentIndex(1)  # Default 512
@@ -18732,7 +19060,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
 
         # Description label
         self._tex_description = QtWidgets.QLabel("")
-        self._tex_description.setStyleSheet("font-size: 10px; color: #999; font-style: italic; margin: 2px 0;")
+        self._tex_description.setStyleSheet("font-size: 11px; color: #636366; font-style: italic; margin: 2px 0;")
         self._tex_description.setWordWrap(True)
         tex_layout.addWidget(self._tex_description)
 
@@ -18747,7 +19075,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         # Preview
         self._tex_preview_label = QtWidgets.QLabel()
         self._tex_preview_label.setFixedSize(128, 128)
-        self._tex_preview_label.setStyleSheet("background: #1a1a1a; border: 1px solid #444;")
+        self._tex_preview_label.setStyleSheet("background: rgba(0, 0, 0, 0.12); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px;")
         self._tex_preview_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         preview_container = QtWidgets.QHBoxLayout()
         preview_container.addStretch()
@@ -18757,50 +19085,50 @@ class ShaderStudio(QtWidgets.QMainWindow):
 
         # Apply to Material button
         self._tex_apply_btn = QtWidgets.QPushButton("Apply to Material")
-        self._tex_apply_btn.setStyleSheet(compact_btn + "background: #2d5a5a; color: #ddd;")
+        self._tex_apply_btn.setStyleSheet(compact_btn + "background: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4);")
         self._tex_apply_btn.clicked.connect(self._on_tex_apply)
         tex_layout.addWidget(self._tex_apply_btn)
 
         # -- Separator --
         tex_sep1 = QtWidgets.QFrame()
         tex_sep1.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        tex_sep1.setStyleSheet("color: #444; margin: 6px 0;")
+        tex_sep1.setStyleSheet("background-color: rgba(255, 255, 255, 0.08); max-height: 1px; margin: 6px 0;")
         tex_layout.addWidget(tex_sep1)
 
         # -- Custom Texture Section --
         tex_custom_lbl = QtWidgets.QLabel("Custom Texture")
-        tex_custom_lbl.setStyleSheet("font-weight: bold; font-size: 12px; color: #ddd; margin-bottom: 2px;")
+        tex_custom_lbl.setStyleSheet("font-weight: 600; font-size: 13px; color: #e5e5e7; margin-bottom: 4px;")
         tex_layout.addWidget(tex_custom_lbl)
 
         tex_custom_row = QtWidgets.QHBoxLayout()
         tex_custom_row.setSpacing(4)
         self._tex_browse_btn = QtWidgets.QPushButton("Browse...")
-        self._tex_browse_btn.setStyleSheet(compact_btn + "background: #3a3a3a; color: #ddd;")
+        self._tex_browse_btn.setStyleSheet(compact_btn)
         self._tex_browse_btn.clicked.connect(self._on_tex_browse)
         self._tex_apply_custom_btn = QtWidgets.QPushButton("Apply Image")
-        self._tex_apply_custom_btn.setStyleSheet(compact_btn + "background: #2d5a5a; color: #ddd;")
+        self._tex_apply_custom_btn.setStyleSheet(compact_btn + "background: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4);")
         self._tex_apply_custom_btn.clicked.connect(self._on_tex_apply_custom)
         tex_custom_row.addWidget(self._tex_browse_btn)
         tex_custom_row.addWidget(self._tex_apply_custom_btn)
         tex_layout.addLayout(tex_custom_row)
 
         self._tex_custom_path_label = QtWidgets.QLabel("No image selected")
-        self._tex_custom_path_label.setStyleSheet("font-size: 10px; color: #888;")
+        self._tex_custom_path_label.setStyleSheet("font-size: 11px; color: #636366;")
         self._tex_custom_path_label.setWordWrap(True)
         tex_layout.addWidget(self._tex_custom_path_label)
 
         # -- Separator --
         tex_sep2 = QtWidgets.QFrame()
         tex_sep2.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        tex_sep2.setStyleSheet("color: #444; margin: 6px 0;")
+        tex_sep2.setStyleSheet("background-color: rgba(255, 255, 255, 0.08); max-height: 1px; margin: 6px 0;")
         tex_layout.addWidget(tex_sep2)
 
         # -- Transform Section --
         tex_transform_lbl = QtWidgets.QLabel("Transform")
-        tex_transform_lbl.setStyleSheet("font-weight: bold; font-size: 12px; color: #ddd; margin-bottom: 2px;")
+        tex_transform_lbl.setStyleSheet("font-weight: 600; font-size: 13px; color: #e5e5e7; margin-bottom: 4px;")
         tex_layout.addWidget(tex_transform_lbl)
 
-        slider_style = "font-size: 10px; color: #ccc;"
+        slider_style = "font-size: 10px; color: rgba(255,255,255,0.6);"
         self._tex_tiling_u = self._make_tex_slider("Tiling U", 1.0, 10.0, 1.0, 0.1, tex_layout)
         self._tex_tiling_v = self._make_tex_slider("Tiling V", 1.0, 10.0, 1.0, 0.1, tex_layout)
         self._tex_offset_u = self._make_tex_slider("Offset U", 0.0, 1.0, 0.0, 0.01, tex_layout)
@@ -18809,12 +19137,12 @@ class ShaderStudio(QtWidgets.QMainWindow):
         # -- Separator --
         tex_sep3 = QtWidgets.QFrame()
         tex_sep3.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        tex_sep3.setStyleSheet("color: #444; margin: 6px 0;")
+        tex_sep3.setStyleSheet("background-color: rgba(255, 255, 255, 0.08); max-height: 1px; margin: 6px 0;")
         tex_layout.addWidget(tex_sep3)
 
         # -- Reset --
         self._tex_reset_btn = QtWidgets.QPushButton("Reset to Original")
-        self._tex_reset_btn.setStyleSheet(tiny_btn + "background: #5a2d2d; color: #ddd;")
+        self._tex_reset_btn.setStyleSheet(tiny_btn + "color: #FF453A;")
         self._tex_reset_btn.clicked.connect(self._on_tex_reset)
         tex_layout.addWidget(self._tex_reset_btn)
 
@@ -18850,11 +19178,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
 
         # Layer list
         self.layer_list_widget = QtWidgets.QListWidget()
-        self.layer_list_widget.setStyleSheet("""
-            QListWidget { background-color: #1e1e1e; border: 1px solid #444; font-size: 11px; }
-            QListWidget::item { padding: 3px; border-bottom: 1px solid #333; }
-            QListWidget::item:selected { background-color: #3a4a5a; }
-        """)
+        self.layer_list_widget.setStyleSheet("")  # Uses global QListWidget style
         self.layer_list_widget.currentRowChanged.connect(self._on_layer_selected)
         layers_tab_layout.addWidget(self.layer_list_widget, 1)
 
@@ -18863,12 +19187,12 @@ class ShaderStudio(QtWidgets.QMainWindow):
         layer_btn_row.setSpacing(3)
         add_layer_btn = QtWidgets.QPushButton("+ Add")
         add_layer_btn.clicked.connect(self._add_layer)
-        add_layer_btn.setStyleSheet(f"background-color: #2d5a2d; {tiny_btn}")
+        add_layer_btn.setStyleSheet(f"background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4); {tiny_btn}")
         add_layer_btn.setToolTip("Add current shader as a new layer")
         layer_btn_row.addWidget(add_layer_btn)
         del_layer_btn = QtWidgets.QPushButton("- Remove")
         del_layer_btn.clicked.connect(self._remove_layer)
-        del_layer_btn.setStyleSheet(f"background-color: #5a2d2d; {tiny_btn}")
+        del_layer_btn.setStyleSheet(f"color: #FF453A; {tiny_btn}")
         layer_btn_row.addWidget(del_layer_btn)
         up_layer_btn = QtWidgets.QPushButton("↑")
         up_layer_btn.clicked.connect(self._move_layer_up)
@@ -18892,7 +19216,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         # Blend mode + opacity for selected layer
         blend_sep = QtWidgets.QFrame()
         blend_sep.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        blend_sep.setStyleSheet("background-color: #444;")
+        blend_sep.setStyleSheet("background-color: rgba(255, 255, 255, 0.08); max-height: 1px;")
         layers_tab_layout.addWidget(blend_sep)
 
         blend_row = QtWidgets.QHBoxLayout()
@@ -18913,14 +19237,14 @@ class ShaderStudio(QtWidgets.QMainWindow):
         opacity_lrow.addWidget(self._layer_opacity_slider)
         self._layer_opacity_label = QtWidgets.QLabel("100%")
         self._layer_opacity_label.setFixedWidth(40)
-        self._layer_opacity_label.setStyleSheet("color: #aaa; font-size: 10px;")
+        self._layer_opacity_label.setStyleSheet("color: #98989d; font-size: 11px;")
         opacity_lrow.addWidget(self._layer_opacity_label)
         layers_tab_layout.addLayout(opacity_lrow)
 
         # --- Clipping mask toggle ---
         clip_row = QtWidgets.QHBoxLayout()
         self._layer_clipping_cb = QtWidgets.QCheckBox("Clipping Mask")
-        self._layer_clipping_cb.setStyleSheet("font-size: 10px; color: #aaa;")
+        self._layer_clipping_cb.setStyleSheet("font-size: 11px; color: #98989d;")
         self._layer_clipping_cb.toggled.connect(self._on_layer_clipping_changed)
         clip_row.addWidget(self._layer_clipping_cb)
         layers_tab_layout.addLayout(clip_row)
@@ -18940,7 +19264,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         inv_mask_btn.clicked.connect(self._on_invert_layer_mask)
         mask_row.addWidget(inv_mask_btn)
         self._paint_mask_cb = QtWidgets.QCheckBox("Paint Mask")
-        self._paint_mask_cb.setStyleSheet("font-size: 10px; color: #aaa;")
+        self._paint_mask_cb.setStyleSheet("font-size: 11px; color: #98989d;")
         self._paint_mask_cb.toggled.connect(self._on_paint_mask_toggled)
         mask_row.addWidget(self._paint_mask_cb)
         layers_tab_layout.addLayout(mask_row)
@@ -18954,15 +19278,11 @@ class ShaderStudio(QtWidgets.QMainWindow):
         history_layout.setSpacing(4)
 
         hist_label = QtWidgets.QLabel("Snapshots")
-        hist_label.setStyleSheet("font-weight: bold; font-size: 11px; color: #fff;")
+        hist_label.setStyleSheet("font-weight: 600; font-size: 13px; color: #e5e5e7;")
         history_layout.addWidget(hist_label)
 
         self._history_list = QtWidgets.QListWidget()
-        self._history_list.setStyleSheet("""
-            QListWidget { background-color: #1e1e1e; color: #ddd; font-size: 10px;
-                          border: 1px solid #444; }
-            QListWidget::item:selected { background-color: #3a3a5a; }
-        """)
+        self._history_list.setStyleSheet("")  # Uses global QListWidget style
         self._history_list.itemDoubleClicked.connect(
             lambda item: self._restore_snapshot(self._history_list.row(item)))
         history_layout.addWidget(self._history_list, 1)
@@ -18989,7 +19309,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         self._snapshot_name_input = QtWidgets.QLineEdit()
         self._snapshot_name_input.setPlaceholderText("Snapshot name...")
         self._snapshot_name_input.setStyleSheet(
-            "background-color: #1e1e1e; color: #ddd; font-size: 10px; padding: 2px;")
+            "font-size: 12px;")
         name_row.addWidget(self._snapshot_name_input)
         take_named_btn = QtWidgets.QPushButton("Save")
         take_named_btn.setStyleSheet(tiny_btn)
@@ -19034,7 +19354,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         ai_tab_layout.setSpacing(0)
 
         ai_splitter = QSplitter(QtCore.Qt.Orientation.Vertical)
-        ai_splitter.setStyleSheet("QSplitter::handle { background-color: #3a3a3a; height: 3px; }")
+        ai_splitter.setStyleSheet("QSplitter::handle { background-color: rgba(255, 255, 255, 0.08); height: 2px; }")
 
         # --- Top 2/3: GLSL Code Editor ---
         ai_editor_widget = QtWidgets.QWidget()
@@ -19044,13 +19364,12 @@ class ShaderStudio(QtWidgets.QMainWindow):
 
         editor_header = QtWidgets.QHBoxLayout()
         editor_title = QtWidgets.QLabel("GLSL Editor")
-        editor_title.setStyleSheet("font-weight: bold; font-size: 11px; color: #fff;")
+        editor_title.setStyleSheet("font-weight: 600; font-size: 13px; color: #e5e5e7;")
         editor_header.addWidget(editor_title)
         self.ai_shader_name_edit = QtWidgets.QLineEdit()
         self.ai_shader_name_edit.setPlaceholderText("Shader name...")
         self.ai_shader_name_edit.setStyleSheet(
-            "background-color: #2a2a2a; border: 1px solid #444; border-radius: 3px; "
-            "padding: 2px 6px; color: #ddd; font-size: 10px;"
+            "font-size: 12px;"
         )
         editor_header.addWidget(self.ai_shader_name_edit)
         ai_editor_layout.addLayout(editor_header)
@@ -19059,8 +19378,10 @@ class ShaderStudio(QtWidgets.QMainWindow):
         self.ai_code_editor.setFont(QtGui.QFont("Consolas", 10))
         self.ai_code_editor.setStyleSheet("""
             QPlainTextEdit {
-                background-color: #1e1e1e; color: #ddd; border: 1px solid #444;
-                font-family: Consolas, monospace; selection-background-color: #3a4a5a;
+                background-color: rgba(0, 0, 0, 0.12); color: #e5e5e7;
+                border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px;
+                font-family: Consolas, monospace; selection-background-color: rgba(10, 132, 255, 0.6);
+                padding: 8px;
             }
         """)
         self.ai_code_editor.setPlaceholderText(
@@ -19077,8 +19398,8 @@ class ShaderStudio(QtWidgets.QMainWindow):
         editor_btn_row.setSpacing(4)
         self.ai_add_shader_btn = QtWidgets.QPushButton("Add to Shaders")
         self.ai_add_shader_btn.setStyleSheet(
-            "background-color: #3d5a3d; color: #ddd; font-size: 11px; "
-            "padding: 4px 10px; font-weight: bold;"
+            "background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4); font-size: 12px; "
+            "padding: 6px 12px; font-weight: 600;"
         )
         self.ai_add_shader_btn.setToolTip("Add this shader to the Shader dropdown permanently")
         self.ai_add_shader_btn.clicked.connect(self._ai_add_shader_to_list)
@@ -19086,20 +19407,20 @@ class ShaderStudio(QtWidgets.QMainWindow):
 
         self.ai_apply_shader_btn = QtWidgets.QPushButton("Apply")
         self.ai_apply_shader_btn.setStyleSheet(
-            "background-color: #4a6fa5; color: #ddd; font-size: 11px; "
-            "padding: 4px 10px; font-weight: bold;"
+            "background-color: rgba(48, 209, 88, 0.7); color: #fff; border: 1px solid rgba(48, 209, 88, 0.4); font-size: 12px; "
+            "padding: 6px 12px; font-weight: 600;"
         )
         self.ai_apply_shader_btn.setToolTip("Preview this shader on the current image")
         self.ai_apply_shader_btn.clicked.connect(self._ai_apply_shader)
         editor_btn_row.addWidget(self.ai_apply_shader_btn)
 
         self.ai_validate_btn = QtWidgets.QPushButton("Validate")
-        self.ai_validate_btn.setStyleSheet("font-size: 10px; padding: 3px 8px;")
+        self.ai_validate_btn.setStyleSheet("font-size: 12px; padding: 5px 10px;")
         self.ai_validate_btn.clicked.connect(self._ai_validate_shader)
         editor_btn_row.addWidget(self.ai_validate_btn)
 
         self.ai_clear_editor_btn = QtWidgets.QPushButton("Clear")
-        self.ai_clear_editor_btn.setStyleSheet("font-size: 10px; padding: 3px 8px;")
+        self.ai_clear_editor_btn.setStyleSheet("font-size: 12px; padding: 5px 10px;")
         self.ai_clear_editor_btn.clicked.connect(self._ai_clear_editor)
         editor_btn_row.addWidget(self.ai_clear_editor_btn)
 
@@ -19116,12 +19437,13 @@ class ShaderStudio(QtWidgets.QMainWindow):
         self.ai_chat_display.setReadOnly(True)
         self.ai_chat_display.setStyleSheet("""
             QTextEdit {
-                background-color: #1e1e1e; color: #ddd; border: 1px solid #444;
-                font-size: 11px; padding: 4px;
+                background-color: rgba(0, 0, 0, 0.12); color: #e5e5e7;
+                border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px;
+                font-size: 13px; padding: 8px;
             }
         """)
         self.ai_chat_display.setHtml(
-            '<div style="color: #666; font-style: italic; padding: 8px;">'
+            '<div style="color: rgba(255,255,255,0.3); font-style: italic; padding: 8px;">'
             'Select an AI model below and describe what you want.<br>'
             'Ask for a shader effect, image generation, or shader code.</div>'
         )
@@ -19134,13 +19456,13 @@ class ShaderStudio(QtWidgets.QMainWindow):
         self.ai_model_combo = QtWidgets.QComboBox()
         self.ai_model_combo.addItem("Select AI Model")
         self.ai_model_combo.addItems(sorted(AI_MODELS.keys()))
-        self.ai_model_combo.setStyleSheet("font-size: 10px;")
+        self.ai_model_combo.setStyleSheet("font-size: 12px;")
         ai_model_row.addWidget(self.ai_model_combo, 1)
 
         self._ai_manage_btn = QtWidgets.QPushButton("\u2699")
         self._ai_manage_btn.setFixedWidth(28)
         self._ai_manage_btn.setToolTip("Manage AI Models")
-        self._ai_manage_btn.setStyleSheet("font-size: 14px; padding: 2px;")
+        self._ai_manage_btn.setStyleSheet("font-size: 14px; padding: 4px;")
         self._ai_manage_btn.clicked.connect(self._open_ai_model_dialog)
         ai_model_row.addWidget(self._ai_manage_btn)
 
@@ -19153,8 +19475,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         self.ai_chat_input = QtWidgets.QPlainTextEdit()
         self.ai_chat_input.setPlaceholderText("Describe a shader or image... (Shift+Enter for new line)")
         self.ai_chat_input.setStyleSheet(
-            "background-color: #2a2a2a; border: 1px solid #444; border-radius: 3px; "
-            "padding: 4px 8px; color: #ddd; font-size: 11px;"
+            "font-size: 13px;"
         )
         self.ai_chat_input.setFixedHeight(68)
         self.ai_chat_input.installEventFilter(self)
@@ -19162,8 +19483,8 @@ class ShaderStudio(QtWidgets.QMainWindow):
 
         self.ai_send_btn = QtWidgets.QPushButton("Send")
         self.ai_send_btn.setStyleSheet(
-            "background-color: #4a6fa5; color: #ddd; font-size: 11px; "
-            "padding: 4px 12px; font-weight: bold;"
+            "background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4); font-size: 13px; "
+            "padding: 6px 14px; font-weight: 600;"
         )
         self.ai_send_btn.clicked.connect(self._ai_chat_send)
         ai_input_row.addWidget(self.ai_send_btn)
@@ -19197,7 +19518,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         cam_layout.setSpacing(4)
 
         cam_header = QtWidgets.QLabel("Camera")
-        cam_header.setStyleSheet("font-weight: bold; font-size: 12px; color: #fff;")
+        cam_header.setStyleSheet("font-weight: 600; font-size: 13px; color: #e5e5e7;")
         cam_layout.addWidget(cam_header)
 
         # --- Camera Slot (multiple cameras) ---
@@ -19222,7 +19543,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         cam_slot_row.addWidget(cam_slot_rename)
         cam_slot_del = QtWidgets.QPushButton("\u2716")
         cam_slot_del.setFixedWidth(24)
-        cam_slot_del.setStyleSheet(f"color: #f88; {tiny_btn}")
+        cam_slot_del.setStyleSheet(f"color: #FF453A; {tiny_btn}")
         cam_slot_del.setToolTip("Delete camera")
         cam_slot_del.clicked.connect(self._delete_camera_slot)
         cam_slot_row.addWidget(cam_slot_del)
@@ -19237,24 +19558,24 @@ class ShaderStudio(QtWidgets.QMainWindow):
         self._camera_preset_combo.currentTextChanged.connect(self._apply_camera_preset)
         cam_preset_row.addWidget(self._camera_preset_combo)
         cam_preset_save = QtWidgets.QPushButton("Save")
-        cam_preset_save.setStyleSheet(f"background-color: #5a5a2d; {tiny_btn}")
+        cam_preset_save.setStyleSheet(f"background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4); {tiny_btn}")
         cam_preset_save.clicked.connect(self._save_camera_preset)
         cam_preset_row.addWidget(cam_preset_save)
         cam_preset_del = QtWidgets.QPushButton("Del")
-        cam_preset_del.setStyleSheet(f"background-color: #5a2d2d; {tiny_btn}")
+        cam_preset_del.setStyleSheet(f"color: #FF453A; {tiny_btn}")
         cam_preset_del.clicked.connect(self._delete_camera_preset)
         cam_preset_row.addWidget(cam_preset_del)
         cam_layout.addLayout(cam_preset_row)
 
         # --- Standard View buttons ---
         views_label = QtWidgets.QLabel("Standard Views")
-        views_label.setStyleSheet("color: #aaa; font-size: 10px; margin-top: 2px;")
+        views_label.setStyleSheet("color: #98989d; font-size: 11px; margin-top: 2px;")
         cam_layout.addWidget(views_label)
         views_grid = QtWidgets.QGridLayout()
         views_grid.setSpacing(2)
         for i, name in enumerate(["Front", "Back", "Left", "Right", "Top", "Bottom"]):
             btn = QtWidgets.QPushButton(name)
-            btn.setStyleSheet(f"background-color: #3a3a3a; {tiny_btn}")
+            btn.setStyleSheet(tiny_btn)
             btn.clicked.connect(lambda checked, n=name: self._apply_standard_view(n))
             views_grid.addWidget(btn, i // 3, i % 3)
         cam_layout.addLayout(views_grid)
@@ -19262,12 +19583,12 @@ class ShaderStudio(QtWidgets.QMainWindow):
         # --- Separator ---
         sep1 = QtWidgets.QFrame()
         sep1.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        sep1.setStyleSheet("background-color: #444;")
+        sep1.setStyleSheet("background-color: rgba(255, 255, 255, 0.08); max-height: 1px;")
         cam_layout.addWidget(sep1)
 
         # --- Pitch / Yaw / FOV sliders ---
-        val_style = "color: #8cf; font-size: 10px; min-width: 36px;"
-        lbl_style = "color: #aaa; font-size: 10px;"
+        val_style = "color: #0A84FF; font-size: 11px; min-width: 36px;"
+        lbl_style = "color: #98989d; font-size: 11px;"
 
         # Pitch (rotation_x)
         pitch_row = QtWidgets.QHBoxLayout()
@@ -19320,7 +19641,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         # --- Separator ---
         sep2 = QtWidgets.QFrame()
         sep2.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        sep2.setStyleSheet("background-color: #444;")
+        sep2.setStyleSheet("background-color: rgba(255, 255, 255, 0.08); max-height: 1px;")
         cam_layout.addWidget(sep2)
 
         # Auto-rotate
@@ -19357,7 +19678,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         # --- Separator ---
         sep3 = QtWidgets.QFrame()
         sep3.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        sep3.setStyleSheet("background-color: #444;")
+        sep3.setStyleSheet("background-color: rgba(255, 255, 255, 0.08); max-height: 1px;")
         cam_layout.addWidget(sep3)
 
         # Render pass selector
@@ -19371,14 +19692,14 @@ class ShaderStudio(QtWidgets.QMainWindow):
 
         # Export passes button
         cam_export_btn = QtWidgets.QPushButton("Export All Passes")
-        cam_export_btn.setStyleSheet(f"background-color: #3a4a5a; {tiny_btn}")
+        cam_export_btn.setStyleSheet(f"background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4); {tiny_btn}")
         cam_export_btn.setToolTip("Export all render passes as separate PNG files")
         cam_export_btn.clicked.connect(self._export_all_passes)
         cam_layout.addWidget(cam_export_btn)
 
         # Reset camera button
         cam_reset_btn = QtWidgets.QPushButton("Reset Camera")
-        cam_reset_btn.setStyleSheet(f"background-color: #4a3a3a; {tiny_btn}")
+        cam_reset_btn.setStyleSheet(tiny_btn)
         cam_reset_btn.setToolTip("Reset camera to default orientation and zoom")
         cam_reset_btn.clicked.connect(self._reset_camera_ui)
         cam_layout.addWidget(cam_reset_btn)
@@ -19401,11 +19722,11 @@ class ShaderStudio(QtWidgets.QMainWindow):
         self._lighting_preset_combo.currentTextChanged.connect(self._apply_lighting_preset)
         light_preset_row.addWidget(self._lighting_preset_combo)
         light_preset_save = QtWidgets.QPushButton("Save")
-        light_preset_save.setStyleSheet(f"background-color: #5a5a2d; {tiny_btn}")
+        light_preset_save.setStyleSheet(f"background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4); {tiny_btn}")
         light_preset_save.clicked.connect(self._save_lighting_preset)
         light_preset_row.addWidget(light_preset_save)
         light_preset_del = QtWidgets.QPushButton("Del")
-        light_preset_del.setStyleSheet(f"background-color: #5a2d2d; {tiny_btn}")
+        light_preset_del.setStyleSheet(f"color: #FF453A; {tiny_btn}")
         light_preset_del.clicked.connect(self._delete_lighting_preset)
         light_preset_row.addWidget(light_preset_del)
         light_container_layout.addLayout(light_preset_row)
@@ -19441,12 +19762,106 @@ class ShaderStudio(QtWidgets.QMainWindow):
         self.main_splitter.addWidget(inspector)
         self.main_splitter.setSizes([900, 350])
 
-        # Set splitter as central widget
+        # Set splitter as central widget with aurora background
         central = QtWidgets.QWidget()
         central_layout = QtWidgets.QVBoxLayout(central)
-        central_layout.setContentsMargins(5, 5, 5, 5)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.setSpacing(0)
+
+        # Aurora background — fills entire central widget
+        self._aurora = AuroraWidget(central)
+        self._aurora.set_colors(self._aurora_colors)
+        self._aurora.lower()  # Behind everything
+
+        central_layout.addWidget(self._title_bar)
         central_layout.addWidget(self.main_splitter)
         self.setCentralWidget(central)
+
+        # Rounded corners on the main window
+        self._corner_radius = 10
+
+        def _central_paint(event, orig=central.paintEvent):
+            painter = QtGui.QPainter(central)
+            painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+            path = QtGui.QPainterPath()
+            path.addRoundedRect(QtCore.QRectF(central.rect()), self._corner_radius, self._corner_radius)
+            painter.setClipPath(path)
+            painter.fillRect(central.rect(), QtGui.QColor(20, 20, 22))
+            painter.end()
+            orig(event)
+        central.paintEvent = _central_paint
+
+        # Override resizeEvent on central to keep aurora sized + clip mask
+        def _central_resize(event, orig=central.resizeEvent):
+            self._aurora.setGeometry(0, 0, central.width(), central.height())
+            # Apply rounded mask to window
+            path = QtGui.QPainterPath()
+            path.addRoundedRect(QtCore.QRectF(central.rect()), self._corner_radius, self._corner_radius)
+            region = QtGui.QRegion(path.toFillPolygon().toPolygon())
+            self.setMask(region)
+            orig(event)
+        central.resizeEvent = _central_resize
+
+        # Make entire widget tree transparent so aurora bleeds through
+        self._inspector_ref = inspector
+        self._central_ref = central
+        self._refresh_transparency()
+
+    def _style_all_combo_popups(self):
+        """Force dark background on all QComboBox dropdown popups (Windows workaround).
+        Uses palette + overrides on each combo's view to beat the global QWidget transparent rule."""
+        dark = QtGui.QColor(28, 28, 30)
+        text_color = QtGui.QColor(229, 229, 231)
+        highlight = QtGui.QColor(10, 132, 255)
+        for combo in self.findChildren(QtWidgets.QComboBox):
+            view = combo.view()
+            if view:
+                # Set palette so native rendering uses dark colors
+                pal = view.palette()
+                pal.setColor(QtGui.QPalette.ColorRole.Base, dark)
+                pal.setColor(QtGui.QPalette.ColorRole.Window, dark)
+                pal.setColor(QtGui.QPalette.ColorRole.Text, text_color)
+                pal.setColor(QtGui.QPalette.ColorRole.Highlight, highlight)
+                pal.setColor(QtGui.QPalette.ColorRole.HighlightedText, QtGui.QColor(255, 255, 255))
+                view.setPalette(pal)
+                view.setAutoFillBackground(True)
+                view.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, False)
+                view.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+                # Also set palette on the viewport widget inside the view
+                vp = view.viewport()
+                if vp:
+                    vp.setPalette(pal)
+                    vp.setAutoFillBackground(True)
+                    vp.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, False)
+                # Style the popup container frame with rounded corners
+                container = view.parentWidget()
+                if container:
+                    container.setAutoFillBackground(False)
+                    container.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+                    container.setWindowFlags(
+                        container.windowFlags()
+                        | QtCore.Qt.WindowType.FramelessWindowHint
+                        | QtCore.Qt.WindowType.NoDropShadowWindowHint
+                    )
+                    container.setStyleSheet(
+                        "QFrame { background-color: rgb(28, 28, 30);"
+                        " border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; }"
+                    )
+
+    def _refresh_transparency(self):
+        """Recursively set transparency on inspector and central widget trees."""
+        _WA_T = QtCore.Qt.WidgetAttribute.WA_TranslucentBackground
+        _WA_O = QtCore.Qt.WidgetAttribute.WA_OpaquePaintEvent
+        for root in [self._central_ref, self._inspector_ref]:
+            root.setAttribute(_WA_T, True)
+            root.setAttribute(_WA_O, False)
+            root.setAutoFillBackground(False)
+            for child in root.findChildren(QtWidgets.QWidget):
+                if isinstance(child, (ShaderCanvas, AuroraWidget, QtWidgets.QListView)):
+                    continue
+                child.setAttribute(_WA_T, True)
+                child.setAttribute(_WA_O, False)
+                child.setAutoFillBackground(False)
 
         # Connect color picker signal
         self.canvas.colorPicked.connect(self._on_color_picked)
@@ -19465,6 +19880,8 @@ class ShaderStudio(QtWidgets.QMainWindow):
 
         # Initialize UI
         self._update_params_ui("Original")
+        self._update_mode_buttons("2d")
+        self._style_all_combo_popups()
 
         # Initialize camera/lighting preset combos
         self._refresh_camera_slot_combo()
@@ -19495,6 +19912,13 @@ class ShaderStudio(QtWidgets.QMainWindow):
         open_3d_action = QtGui.QAction("Open 3D Model...", self)
         open_3d_action.triggered.connect(self.load_3d_model)
         file_menu.addAction(open_3d_action)
+
+        # Load Primitive submenu
+        primitive_menu = file_menu.addMenu("Load Primitive")
+        for prim_name in ["Cube", "Sphere"]:
+            prim_action = QtGui.QAction(prim_name, self)
+            prim_action.triggered.connect(lambda checked, n=prim_name: self._load_primitive(n))
+            primitive_menu.addAction(prim_action)
 
         file_menu.addSeparator()
 
@@ -19615,6 +20039,30 @@ class ShaderStudio(QtWidgets.QMainWindow):
         normals_action.triggered.connect(lambda checked: self.canvas.set_show_normals(checked))
         view_menu.addAction(normals_action)
 
+        view_menu.addSeparator()
+
+        aurora_toggle_action = QtGui.QAction("&Aurora Background", self)
+        aurora_toggle_action.setCheckable(True)
+        aurora_toggle_action.setChecked(True)
+        aurora_toggle_action.triggered.connect(self._toggle_aurora)
+        view_menu.addAction(aurora_toggle_action)
+
+        aurora_colors_action = QtGui.QAction("Aurora &Colors...", self)
+        aurora_colors_action.triggered.connect(self._edit_aurora_colors)
+        view_menu.addAction(aurora_colors_action)
+
+        aurora_speed_action = QtGui.QAction("Aurora &Speed...", self)
+        aurora_speed_action.triggered.connect(self._edit_aurora_speed)
+        view_menu.addAction(aurora_speed_action)
+
+        view_menu.addSeparator()
+
+        self._histogram_action = QtGui.QAction("&Histogram", self)
+        self._histogram_action.setCheckable(True)
+        self._histogram_action.setChecked(False)
+        self._histogram_action.triggered.connect(self._toggle_histogram)
+        view_menu.addAction(self._histogram_action)
+
         # Tools menu
         tools_menu = menubar.addMenu("&Tools")
 
@@ -19683,6 +20131,70 @@ class ShaderStudio(QtWidgets.QMainWindow):
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
 
+    def _transfer_menus_to_custom_bar(self):
+        """Copy all menus from the native QMenuBar to our custom embedded one."""
+        native = self.menuBar()
+        for action in native.actions():
+            menu = action.menu()
+            if menu:
+                # Re-parent the menu to our custom bar
+                new_action = self._custom_menubar.addMenu(menu)
+                new_action.setText(action.text())
+
+    def _toggle_maximize(self):
+        """Toggle between maximized and normal window state."""
+        if self.isMaximized():
+            self.showNormal()
+            self._max_btn.setText("□")
+        else:
+            self.showMaximized()
+            self._max_btn.setText("❐")
+
+    # --- Title bar drag / window resize ---
+
+    def mousePressEvent(self, event):
+        """Handle title bar drag start."""
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            # Check if click is in the title bar area
+            title_bar_rect = self._title_bar.geometry()
+            if title_bar_rect.contains(event.pos()):
+                self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        """Handle title bar dragging."""
+        if self._drag_pos is not None and event.buttons() & QtCore.Qt.MouseButton.LeftButton:
+            if self.isMaximized():
+                # Un-maximize and position window under cursor
+                ratio = event.pos().x() / self.width()
+                self.showNormal()
+                new_x = event.globalPosition().toPoint().x() - int(self.width() * ratio)
+                new_y = event.globalPosition().toPoint().y() - 18
+                self.move(new_x, new_y)
+                self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                self._max_btn.setText("□")
+            else:
+                self.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """Handle title bar drag end."""
+        self._drag_pos = None
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        """Double-click title bar to maximize/restore."""
+        title_bar_rect = self._title_bar.geometry()
+        if title_bar_rect.contains(event.pos()):
+            self._toggle_maximize()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
     def _update_recent_menu(self):
         """Update the recent files menu."""
         self.recent_menu.clear()
@@ -19713,13 +20225,13 @@ class ShaderStudio(QtWidgets.QMainWindow):
                     self._sync_lighting_ui()
                     self._refresh_tex_material_combo()
                     self._sync_zoom_slider()
-                    self.mode_2d_btn.setEnabled(True)
+                    self._update_mode_buttons("3d")
                     self._hide_gif_controls()
                     add_recent_file(path)
             else:
                 self.canvas.set_2d_mode()
                 self._light_container.hide()
-                self.mode_2d_btn.setEnabled(False)
+                self._update_mode_buttons("2d")
                 if self.canvas.load_texture(path):
                     self._on_image_loaded(path)
                     add_recent_file(path)
@@ -19853,7 +20365,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
         self.color_display.setStyleSheet(
             f"background-color: rgb({r}, {g}, {b}); "
             f"color: {'#000' if (r + g + b) > 384 else '#fff'}; "
-            f"border: 1px solid #555; border-radius: 4px; font-weight: bold;"
+            f"border: 1px solid #3a3a3c; border-radius: 4px; font-weight: bold;"
         )
         self.color_display.show()
 
@@ -19967,7 +20479,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
             btn = QtWidgets.QPushButton("")
             btn.setFixedSize(18, 18)
             r, g, b, a = color
-            btn.setStyleSheet(f"background-color: rgb({r},{g},{b}); border: 1px solid #555; padding: 0px;")
+            btn.setStyleSheet(f"background-color: rgb({r},{g},{b}); border: 1px solid #3a3a3c; padding: 0px;")
             btn.setToolTip(f"RGB({r},{g},{b})")
             btn.clicked.connect(lambda checked, c=color: self._select_swatch_color(c))
             layout.addWidget(btn, i // cols, i % cols)
@@ -20314,15 +20826,128 @@ class ShaderStudio(QtWidgets.QMainWindow):
             self._exit_fullscreen()
         else:
             self.is_fullscreen = True
-            self.menuBar().hide()
+            self._title_bar.hide()
             self.showFullScreen()
 
     def _exit_fullscreen(self):
         """Exit fullscreen mode."""
         if self.is_fullscreen:
             self.is_fullscreen = False
-            self.menuBar().show()
+            self._title_bar.show()
             self.showNormal()
+
+    # --- AURORA BACKGROUND ---
+
+    def _toggle_aurora(self, checked):
+        """Enable or disable the aurora background animation."""
+        self._aurora.set_enabled(checked)
+
+    def _edit_aurora_colors(self):
+        """Open a dialog to pick aurora colors."""
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Aurora Colors")
+        dlg.setFixedSize(360, 320)
+        layout = QtWidgets.QVBoxLayout(dlg)
+        layout.setSpacing(8)
+
+        info = QtWidgets.QLabel("Click a swatch to change its color.\nUse + / - to add or remove colors.")
+        info.setStyleSheet("color: rgba(255,255,255,0.5); font-size: 11px;")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        self._aurora_edit_colors = [QtGui.QColor(c) for c in self._aurora_colors]
+        swatch_container = QtWidgets.QWidget()
+        swatch_layout = QtWidgets.QHBoxLayout(swatch_container)
+        swatch_layout.setContentsMargins(0, 0, 0, 0)
+        swatch_layout.setSpacing(6)
+
+        def rebuild_swatches():
+            while swatch_layout.count():
+                w = swatch_layout.takeAt(0).widget()
+                if w:
+                    w.deleteLater()
+            for i, c in enumerate(self._aurora_edit_colors):
+                btn = QtWidgets.QPushButton()
+                btn.setFixedSize(40, 40)
+                btn.setStyleSheet(
+                    f"background-color: rgba({c.red()},{c.green()},{c.blue()},{c.alpha()});"
+                    f"border: 2px solid rgba(255,255,255,0.3); border-radius: 8px;"
+                )
+                btn.setToolTip(f"Color {i+1}: Click to change")
+                idx = i
+                btn.clicked.connect(lambda checked, ii=idx: pick_color(ii))
+                swatch_layout.addWidget(btn)
+            swatch_layout.addStretch()
+
+        def pick_color(idx):
+            cur = self._aurora_edit_colors[idx]
+            c = QtWidgets.QColorDialog.getColor(
+                cur, dlg, "Pick Aurora Color",
+                QtWidgets.QColorDialog.ColorDialogOption.ShowAlphaChannel
+            )
+            if c.isValid():
+                self._aurora_edit_colors[idx] = c
+                rebuild_swatches()
+
+        rebuild_swatches()
+        layout.addWidget(swatch_container)
+
+        # Add / Remove buttons
+        pm_row = QtWidgets.QHBoxLayout()
+        add_btn = QtWidgets.QPushButton("+ Add Color")
+        add_btn.setStyleSheet("font-size: 12px; padding: 4px 10px;")
+        def add_color():
+            self._aurora_edit_colors.append(QtGui.QColor(
+                random.randint(50, 200), random.randint(50, 200),
+                random.randint(50, 200), 100
+            ))
+            rebuild_swatches()
+        add_btn.clicked.connect(add_color)
+        pm_row.addWidget(add_btn)
+
+        rem_btn = QtWidgets.QPushButton("- Remove Last")
+        rem_btn.setStyleSheet("font-size: 12px; padding: 4px 10px; color: #FF453A;")
+        def rem_color():
+            if len(self._aurora_edit_colors) > 1:
+                self._aurora_edit_colors.pop()
+                rebuild_swatches()
+        rem_btn.clicked.connect(rem_color)
+        pm_row.addWidget(rem_btn)
+        layout.addLayout(pm_row)
+
+        layout.addStretch()
+
+        # OK / Cancel
+        btn_row = QtWidgets.QHBoxLayout()
+        ok_btn = QtWidgets.QPushButton("Apply")
+        ok_btn.setStyleSheet(
+            "background-color: rgba(10, 132, 255, 0.7); color: #fff;"
+            "border: 1px solid rgba(10, 132, 255, 0.4);"
+            "font-size: 13px; padding: 6px 20px; font-weight: 600;"
+        )
+        def apply_colors():
+            self._aurora_colors = list(self._aurora_edit_colors)
+            self._aurora.set_colors(self._aurora_colors)
+            dlg.accept()
+        ok_btn.clicked.connect(apply_colors)
+        btn_row.addWidget(ok_btn)
+        cancel_btn = QtWidgets.QPushButton("Cancel")
+        cancel_btn.setStyleSheet("font-size: 13px; padding: 6px 20px;")
+        cancel_btn.clicked.connect(dlg.reject)
+        btn_row.addWidget(cancel_btn)
+        layout.addLayout(btn_row)
+
+        dlg.exec()
+
+    def _edit_aurora_speed(self):
+        """Adjust aurora animation speed."""
+        val, ok = QtWidgets.QInputDialog.getDouble(
+            self, "Aurora Speed",
+            "Animation speed (0.001 = slow, 0.02 = fast):",
+            self._aurora._speed, 0.001, 0.05, 3
+        )
+        if ok:
+            self._aurora._speed = val
 
     # --- DRAG & DROP ---
     def dragEnterEvent(self, event):
@@ -20341,7 +20966,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
                 self._batch_nav_clear()  # Clear batch navigation on drag-and-drop
                 self.canvas.set_2d_mode()
                 self._light_container.hide()
-                self.mode_2d_btn.setEnabled(False)
+                self._update_mode_buttons("2d")
                 if self.canvas.load_texture(path):
                     self._on_image_loaded(path)
                     add_recent_file(path)
@@ -20352,7 +20977,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
                     self._light_container.show()
                     self._sync_lighting_ui()
                     self._sync_zoom_slider()
-                    self.mode_2d_btn.setEnabled(True)
+                    self._update_mode_buttons("3d")
                     self._hide_gif_controls()
                     add_recent_file(path)
                     self._update_recent_menu()
@@ -20714,7 +21339,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
     def _show_about(self):
         """Show about dialog."""
         about = f"""
-<h2>Shader Studio</h2>
+<h2>Shade Studio</h2>
 <p>Version 2.0</p>
 <p>A professional shader tool for 2D and 3D rendering.</p>
 <h4>Features:</h4>
@@ -20728,7 +21353,7 @@ class ShaderStudio(QtWidgets.QMainWindow):
 <li>And much more!</li>
 </ul>
 """
-        QtWidgets.QMessageBox.about(self, "About Shader Studio", about)
+        QtWidgets.QMessageBox.about(self, "About Shade Studio", about)
 
     def _filter_shaders(self, category):
         self.shader_combo.blockSignals(True)
@@ -21141,8 +21766,8 @@ Only respond with valid JSON, no other text. Example:
         if role == "user":
             html = (
                 '<div style="text-align: right; margin: 4px 0;">'
-                '<span style="background-color: #3a4a5a; padding: 4px 8px; '
-                'border-radius: 8px; color: #ddd; font-size: 11px; '
+                '<span style="background-color: #0A84FF; padding: 4px 8px; '
+                'border-radius: 8px; color: rgba(255,255,255,0.75); font-size: 11px; '
                 'display: inline-block; max-width: 85%;">'
                 f'{safe}</span></div>'
             )
@@ -21163,7 +21788,7 @@ Only respond with valid JSON, no other text. Example:
             html = (
                 '<div style="text-align: left; margin: 4px 0;">'
                 '<span style="background-color: #2d3d2d; padding: 4px 8px; '
-                'border-radius: 8px; color: #ddd; font-size: 11px; '
+                'border-radius: 8px; color: rgba(255,255,255,0.75); font-size: 11px; '
                 'display: inline-block; max-width: 85%;">'
                 f'{safe}</span></div>'
             )
@@ -21373,7 +21998,7 @@ Only respond with valid JSON, no other text. Example:
             # Load into viewport
             self.canvas.set_2d_mode()
             self._light_container.hide()
-            self.mode_2d_btn.setEnabled(False)
+            self._update_mode_buttons("2d")
             if self.canvas.load_texture(temp_path):
                 self._on_image_loaded(temp_path)
                 msg = "Image generated and loaded into the viewport."
@@ -21580,7 +22205,7 @@ Only respond with valid JSON, no other text. Example:
         uniforms = shader_def.get("uniforms", {})
         if not uniforms:
             label = QtWidgets.QLabel("No adjustable parameters")
-            label.setStyleSheet("color: #666; font-style: italic;")
+            label.setStyleSheet("color: rgba(255,255,255,0.3); font-style: italic;")
             self.params_layout.insertWidget(0, label)
             return
 
@@ -21589,6 +22214,17 @@ Only respond with valid JSON, no other text. Example:
             widget.valueChanged.connect(self._on_param_changed)
             self.param_widgets[name] = widget
             self.params_layout.insertWidget(self.params_layout.count() - 1, widget)
+
+        # Refresh transparency on new widgets so aurora shows through
+        if hasattr(self, '_inspector_ref'):
+            _WA_T = QtCore.Qt.WidgetAttribute.WA_TranslucentBackground
+            _WA_O = QtCore.Qt.WidgetAttribute.WA_OpaquePaintEvent
+            for w in self._inspector_ref.findChildren(QtWidgets.QWidget):
+                if isinstance(w, (ShaderCanvas, AuroraWidget, QtWidgets.QListView)):
+                    continue
+                w.setAttribute(_WA_T, True)
+                w.setAttribute(_WA_O, False)
+                w.setAutoFillBackground(False)
 
     def _on_param_changed(self, name, value):
         # Save current state for undo before making change
@@ -21707,14 +22343,14 @@ Only respond with valid JSON, no other text. Example:
         row = QtWidgets.QHBoxLayout()
         row.setSpacing(4)
         lbl = QtWidgets.QLabel(f"{label}:")
-        lbl.setStyleSheet("font-size: 10px; color: #ccc;")
+        lbl.setStyleSheet("font-size: 10px; color: rgba(255,255,255,0.6);")
         lbl.setFixedWidth(52)
         slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         steps = int((max_val - min_val) / step)
         slider.setRange(0, steps)
         slider.setValue(int((default - min_val) / step))
         val_lbl = QtWidgets.QLabel(f"{default:.2f}")
-        val_lbl.setStyleSheet("font-size: 10px; color: #aaa;")
+        val_lbl.setStyleSheet("font-size: 10px; color: rgba(255,255,255,0.5);")
         val_lbl.setFixedWidth(36)
 
         def on_change(v):
@@ -21761,7 +22397,7 @@ Only respond with valid JSON, no other text. Example:
             row.setSpacing(4)
             display_name = pname.replace("_", " ").title()
             lbl = QtWidgets.QLabel(f"{display_name}:")
-            lbl.setStyleSheet("font-size: 10px; color: #ccc;")
+            lbl.setStyleSheet("font-size: 10px; color: rgba(255,255,255,0.5); background: transparent;")
             lbl.setFixedWidth(72)
             slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
             mn, mx = pdef["min"], pdef["max"]
@@ -21771,7 +22407,7 @@ Only respond with valid JSON, no other text. Example:
             default = pdef.get("default", mn)
             slider.setValue(int((default - mn) / step))
             val_lbl = QtWidgets.QLabel(f"{default:.2f}")
-            val_lbl.setStyleSheet("font-size: 10px; color: #aaa;")
+            val_lbl.setStyleSheet("font-size: 10px; color: rgba(255,255,255,0.45); background: transparent;")
             val_lbl.setFixedWidth(36)
 
             def make_cb(s, vl, mn_=mn, step_=step):
@@ -21789,6 +22425,16 @@ Only respond with valid JSON, no other text. Example:
 
         # Auto-generate preview for new type
         self._on_tex_generate_preview()
+        # Refresh transparency on new widgets
+        if hasattr(self, '_inspector_ref'):
+            _WA_T = QtCore.Qt.WidgetAttribute.WA_TranslucentBackground
+            _WA_O = QtCore.Qt.WidgetAttribute.WA_OpaquePaintEvent
+            for w in self._inspector_ref.findChildren(QtWidgets.QWidget):
+                if isinstance(w, (ShaderCanvas, AuroraWidget, QtWidgets.QListView)):
+                    continue
+                w.setAttribute(_WA_T, True)
+                w.setAttribute(_WA_O, False)
+                w.setAutoFillBackground(False)
 
     def _get_tex_params(self):
         """Collect current texture parameter values from sliders."""
@@ -21899,11 +22545,11 @@ Only respond with valid JSON, no other text. Example:
 
         self._light_sliders = []
         slider_style = "font-size: 10px; padding: 0px;"
-        label_style = "color: #aaa; font-size: 10px; min-width: 14px;"
-        val_style = "color: #aaa; font-size: 10px; min-width: 28px;"
+        label_style = "color: rgba(255,255,255,0.5); font-size: 10px; min-width: 14px;"
+        val_style = "color: rgba(255,255,255,0.5); font-size: 10px; min-width: 28px;"
         tile_style = (
-            "QFrame { border: 1px solid #555; border-radius: 4px;"
-            " background-color: #2e2e2e; }"
+            "QFrame { border: 1px solid rgba(255,255,255,0.08); border-radius: 4px;"
+            " background-color: rgba(0, 0, 0, 0.15); }"
         )
         pos_range = max(300, int(getattr(self.canvas, '_model_extent', 2.0) * 40))
 
@@ -21930,7 +22576,7 @@ Only respond with valid JSON, no other text. Example:
             hdr_row.setContentsMargins(0, 0, 0, 0)
             hdr_row.setSpacing(3)
             header = QtWidgets.QLabel(f"Light {li+1}")
-            header.setStyleSheet("color: #ccc; font-size: 10px; font-weight: bold;")
+            header.setStyleSheet("color: rgba(255,255,255,0.6); font-size: 10px; font-weight: bold;")
             hdr_row.addWidget(header)
             hdr_row.addStretch()
 
@@ -21950,7 +22596,7 @@ Only respond with valid JSON, no other text. Example:
             del_btn = QtWidgets.QPushButton("\u2716")
             del_btn.setFixedSize(16, 16)
             del_btn.setStyleSheet(
-                "font-size: 9px; padding: 0px; background-color: #5a2d2d; color: #ddd;"
+                "font-size: 9px; padding: 0px; background-color: rgba(255, 69, 58, 0.6); color: #fff; border: 1px solid rgba(255, 69, 58, 0.3); color: rgba(255,255,255,0.75);"
                 " border-radius: 2px;"
             )
             del_btn.setToolTip("Remove this light")
@@ -22031,14 +22677,14 @@ Only respond with valid JSON, no other text. Example:
 
         # Add Light button
         add_btn = QtWidgets.QPushButton("+ Add Light")
-        add_btn.setStyleSheet("font-size: 11px; padding: 2px 4px; background-color: #2d5a2d;")
+        add_btn.setStyleSheet("font-size: 11px; padding: 2px 4px; background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4);")
         add_btn.clicked.connect(self._add_light)
         layout.addWidget(add_btn)
 
         # Global separator
         gsep = QtWidgets.QFrame()
         gsep.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        gsep.setStyleSheet("background-color: #555;")
+        gsep.setStyleSheet("background-color: rgba(255, 255, 255, 0.08);")
         layout.addWidget(gsep)
 
         # Ambient
@@ -22100,7 +22746,7 @@ Only respond with valid JSON, no other text. Example:
 
         # Reset Lighting button
         reset_btn = QtWidgets.QPushButton("Reset Lighting")
-        reset_btn.setStyleSheet("font-size: 11px; padding: 2px 4px; background-color: #5a2d2d;")
+        reset_btn.setStyleSheet("font-size: 11px; padding: 2px 4px; background-color: rgba(255, 69, 58, 0.6); color: #fff; border: 1px solid rgba(255, 69, 58, 0.3);")
         reset_btn.clicked.connect(self._reset_lighting)
         layout.addWidget(reset_btn)
 
@@ -22381,18 +23027,18 @@ Only respond with valid JSON, no other text. Example:
                     param_parts.append(f"{k}={v:.2f}")
             suffix = f"  ({', '.join(param_parts)})" if param_parts else ""
             label = QtWidgets.QLabel(f"{shader_name}{suffix}")
-            label.setStyleSheet("color: #ccc; font-size: 10px;")
+            label.setStyleSheet("color: rgba(255,255,255,0.6); font-size: 10px;")
             if not entry.get('enabled', True):
-                label.setStyleSheet("color: #666; font-size: 10px;")
+                label.setStyleSheet("color: rgba(255,255,255,0.3); font-size: 10px;")
             row.addWidget(label, 1)
             edit_btn = QtWidgets.QPushButton("Edit")
             edit_btn.setFixedWidth(32)
-            edit_btn.setStyleSheet("font-size: 9px; padding: 1px 3px;")
+            edit_btn.setStyleSheet("font-size: 10px; padding: 2px 4px; border-radius: 4px;")
             edit_btn.clicked.connect(lambda _, idx=i: self._on_chain_layer_edit(idx))
             row.addWidget(edit_btn)
             del_btn = QtWidgets.QPushButton("X")
             del_btn.setFixedWidth(20)
-            del_btn.setStyleSheet("font-size: 9px; padding: 1px 3px; background-color: #5a2d2d;")
+            del_btn.setStyleSheet("font-size: 10px; padding: 2px 4px; border-radius: 4px; background-color: rgba(255, 69, 58, 0.6); color: #fff; border: 1px solid rgba(255, 69, 58, 0.3);")
             del_btn.clicked.connect(lambda _, idx=i: self._on_chain_layer_remove(idx))
             row.addWidget(del_btn)
             list_item = QtWidgets.QListWidgetItem()
@@ -22431,7 +23077,7 @@ Only respond with valid JSON, no other text. Example:
                 self.param_widgets[param_name].set_value(value)
         # Update button states
         self.bake_pass_btn.setText("Update")
-        self.bake_pass_btn.setStyleSheet("background-color: #2d5a5a; font-size: 11px; padding: 2px 4px;")
+        self.bake_pass_btn.setStyleSheet("background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4); font-size: 11px; padding: 2px 4px;")
         self.bake_pass_btn.setToolTip(f"Update Layer {index + 1} — Save parameter changes")
         self.reset_chain_btn.setEnabled(False)
 
@@ -22451,7 +23097,7 @@ Only respond with valid JSON, no other text. Example:
         """Exit adjustment layer edit mode and restore UI."""
         self._editing_chain_index = None
         self.bake_pass_btn.setText("Add Layer")
-        self.bake_pass_btn.setStyleSheet("background-color: #5a4a2d; font-size: 11px; padding: 2px 4px;")
+        self.bake_pass_btn.setStyleSheet("background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4); font-size: 11px; padding: 2px 4px;")
         self.bake_pass_btn.setToolTip("Add current shader as a new layer")
         self.reset_chain_btn.setEnabled(True)
         # Reset to Original
@@ -22736,9 +23382,9 @@ Only respond with valid JSON, no other text. Example:
             btn = QtWidgets.QPushButton(str(i + 1))
             btn.setFixedSize(28, 24)
             if i == self.canvas._anim_current_frame:
-                btn.setStyleSheet("background-color: #5a9fff; color: #fff; font-size: 10px; font-weight: bold; border-radius: 3px;")
+                btn.setStyleSheet("background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4); font-size: 10px; font-weight: bold; border-radius: 3px;")
             else:
-                btn.setStyleSheet("background-color: #333; color: #aaa; font-size: 10px; border-radius: 3px;")
+                btn.setStyleSheet("background-color: rgba(255,255,255,0.06); color: rgba(255,255,255,0.5); font-size: 10px; border-radius: 3px;")
             btn.clicked.connect(lambda _, idx=i: self._on_frame_clicked(idx))
             self._frame_strip_layout.addWidget(btn)
         self._frame_strip_layout.addStretch()
@@ -22816,10 +23462,10 @@ Only respond with valid JSON, no other text. Example:
         """Update animation UI elements (play button icon, frame highlight)."""
         if self.canvas._anim_playing:
             self.anim_play_btn.setText("⏸")
-            self.anim_play_btn.setStyleSheet("font-size: 12px; padding: 2px; background-color: #5a5a2d;")
+            self.anim_play_btn.setStyleSheet("font-size: 12px; padding: 4px; background-color: rgba(255, 159, 10, 0.7); color: #fff; border: 1px solid rgba(255, 159, 10, 0.4);")
         else:
             self.anim_play_btn.setText("▶")
-            self.anim_play_btn.setStyleSheet("font-size: 12px; padding: 2px; background-color: #2d5a2d;")
+            self.anim_play_btn.setStyleSheet("font-size: 12px; padding: 4px; background-color: rgba(48, 209, 88, 0.7); color: #fff; border: 1px solid rgba(48, 209, 88, 0.4);")
         self._refresh_frame_strip()
         self._refresh_layer_list()
 
@@ -22966,20 +23612,46 @@ Only respond with valid JSON, no other text. Example:
     # --- 3D Mode Methods ---
 
     def _pick_bg_color(self):
-        """Open a color picker for the viewport background color."""
+        """Open color picker with a Transparent (Aurora) checkbox embedded."""
+        dlg = QtWidgets.QColorDialog(self)
+        dlg.setWindowTitle("Viewport Background Color")
+        dlg.setOption(QtWidgets.QColorDialog.ColorDialogOption.ShowAlphaChannel, True)
+
+        # Set current color
         r, g, b, a = self.canvas.bg_color
-        current = QtGui.QColor(int(r * 255), int(g * 255), int(b * 255), int(a * 255))
-        color = QtWidgets.QColorDialog.getColor(
-            current, self, "Viewport Background Color",
-            QtWidgets.QColorDialog.ColorDialogOption.ShowAlphaChannel
-        )
-        if color.isValid():
-            self.canvas.bg_color = (
-                color.redF(), color.greenF(), color.blueF(), color.alphaF()
-            )
-            self.bg_color_btn.setStyleSheet(
-                f"background-color: {color.name()}; border: 2px solid #555; border-radius: 3px;"
-            )
+        dlg.setCurrentColor(QtGui.QColor(int(r * 255), int(g * 255), int(b * 255), int(a * 255)))
+
+        # Add transparent checkbox to the dialog layout
+        aurora_cb = QtWidgets.QCheckBox("Transparent (Show Aurora)")
+        aurora_cb.setChecked(getattr(self, '_bg_transparent', False))
+        aurora_cb.setStyleSheet("color: #e5e5e7; font-size: 12px; padding: 6px;")
+        dlg_layout = dlg.layout()
+        if dlg_layout:
+            dlg_layout.addWidget(aurora_cb)
+
+        if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            if aurora_cb.isChecked():
+                self._bg_transparent = True
+                self._saved_bg_color = (
+                    dlg.currentColor().redF(), dlg.currentColor().greenF(),
+                    dlg.currentColor().blueF(), dlg.currentColor().alphaF()
+                )
+                self.canvas.bg_color = (0.0, 0.0, 0.0, 0.0)
+                self.bg_color_btn.setStyleSheet(
+                    "background: qlineargradient(x1:0, y1:0, x2:1, y2:1,"
+                    " stop:0 rgba(10,132,255,0.5), stop:0.5 rgba(48,209,88,0.4),"
+                    " stop:1 rgba(191,90,242,0.4));"
+                    " border: 2px solid rgba(255,255,255,0.2); border-radius: 8px;"
+                )
+            else:
+                self._bg_transparent = False
+                color = dlg.currentColor()
+                self.canvas.bg_color = (
+                    color.redF(), color.greenF(), color.blueF(), color.alphaF()
+                )
+                self.bg_color_btn.setStyleSheet(
+                    f"background-color: {color.name()}; border: 2px solid rgba(255,255,255,0.2); border-radius: 8px;"
+                )
             self.canvas.update()
 
     def _load_primitive(self, text):
@@ -22997,7 +23669,7 @@ Only respond with valid JSON, no other text. Example:
             self._sync_lighting_ui()
             self._refresh_tex_material_combo()
             self._sync_zoom_slider()
-            self.mode_2d_btn.setEnabled(True)
+            self._update_mode_buttons("3d")
             self._set_active_tool("none")
 
     def load_3d_model(self):
@@ -23013,18 +23685,51 @@ Only respond with valid JSON, no other text. Example:
                 self._sync_lighting_ui()
                 self._refresh_tex_material_combo()
                 self._sync_zoom_slider()
-                self.mode_2d_btn.setEnabled(True)
+                self._update_mode_buttons("3d")
                 self._set_active_tool("none")
 
     def _switch_to_2d(self):
         """Switch back to 2D mode."""
         self.canvas.set_2d_mode()
         self._light_container.hide()
-        self.mode_2d_btn.setEnabled(False)
         self._cam_auto_rotate_cb.setChecked(False)
+        self._update_mode_buttons("2d")
         # Switch to Markup tab if we have an image
         if self.canvas._has_image:
             self._switch_to_markup_tab()
+
+    def _switch_to_3d(self):
+        """Switch to 3D mode by loading a primitive if not already in 3D."""
+        if not self.canvas.mode_3d:
+            # Load a default cube if no 3D model loaded
+            if self.canvas.load_primitive("cube"):
+                self.image_info.setText("3D Primitive: Cube")
+                self._light_container.show()
+                self._sync_lighting_ui()
+                self._refresh_tex_material_combo()
+                self._sync_zoom_slider()
+                self._set_active_tool("none")
+        self._update_mode_buttons("3d")
+
+    def _update_mode_buttons(self, mode):
+        """Update 2D/3D mode button visual states."""
+        active_style = (
+            "font-size: 11px; padding: 5px 12px; border-radius: 8px; font-weight: 600;"
+            "background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4);"
+        )
+        inactive_style = (
+            "font-size: 11px; padding: 5px 12px; border-radius: 8px; font-weight: 500;"
+        )
+        if mode == "2d":
+            self.mode_2d_btn.setChecked(True)
+            self.mode_2d_btn.setStyleSheet(active_style)
+            self.mode_3d_btn.setChecked(False)
+            self.mode_3d_btn.setStyleSheet(inactive_style)
+        else:
+            self.mode_2d_btn.setChecked(False)
+            self.mode_2d_btn.setStyleSheet(inactive_style)
+            self.mode_3d_btn.setChecked(True)
+            self.mode_3d_btn.setStyleSheet(active_style)
 
     def _toggle_auto_rotate(self, enabled):
         """Toggle auto-rotation."""
@@ -23379,7 +24084,7 @@ Only respond with valid JSON, no other text. Example:
             self._batch_nav_clear()  # Clear batch navigation when loading a single image
             self.canvas.set_2d_mode()
             self._light_container.hide()
-            self.mode_2d_btn.setEnabled(False)
+            self._update_mode_buttons("2d")
             if self.canvas.load_texture(path):
                 self._on_image_loaded(path)
 
@@ -23567,7 +24272,7 @@ Only respond with valid JSON, no other text. Example:
         cancel_btn.clicked.connect(dialog.reject)
         btn_layout.addWidget(cancel_btn)
         export_btn = QtWidgets.QPushButton("Export...")
-        export_btn.setStyleSheet("background-color: #4a6fa5;")
+        export_btn.setStyleSheet("background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4);")
         export_btn.clicked.connect(dialog.accept)
         btn_layout.addWidget(export_btn)
         dlg_layout.addRow(btn_layout)
@@ -23890,7 +24595,7 @@ Only respond with valid JSON, no other text. Example:
 
         chain_info = QtWidgets.QLabel("Add shaders to chain multiple effects. Leave empty to use the current shader.")
         chain_info.setWordWrap(True)
-        chain_info.setStyleSheet("color: #aaa; font-size: 11px;")
+        chain_info.setStyleSheet("color: rgba(255,255,255,0.5); font-size: 11px;")
         chain_layout.addWidget(chain_info)
 
         # Shader chain list — pre-populate from bake chain if available
@@ -23901,7 +24606,7 @@ Only respond with valid JSON, no other text. Example:
             self._batch_shader_chain = []
         self._batch_chain_list = QtWidgets.QListWidget()
         self._batch_chain_list.setMaximumHeight(120)
-        self._batch_chain_list.setStyleSheet("background-color: #2a2a2a; color: #ddd;")
+        self._batch_chain_list.setStyleSheet("background-color: rgba(0, 0, 0, 0.15); color: rgba(255,255,255,0.75);")
         chain_layout.addWidget(self._batch_chain_list)
 
         # Add shader row: combo + add button
@@ -23914,7 +24619,7 @@ Only respond with valid JSON, no other text. Example:
 
         add_btn = QtWidgets.QPushButton("Add")
         add_btn.setFixedWidth(60)
-        add_btn.setStyleSheet("background-color: #2d5a2d;")
+        add_btn.setStyleSheet("background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4);")
         add_btn.clicked.connect(lambda: self._batch_chain_add_shader(dialog))
         add_row.addWidget(add_btn)
         chain_layout.addLayout(add_row)
@@ -23935,7 +24640,7 @@ Only respond with valid JSON, no other text. Example:
         action_row.addWidget(move_down_btn)
 
         remove_btn = QtWidgets.QPushButton("Remove")
-        remove_btn.setStyleSheet("background-color: #5a2d2d;")
+        remove_btn.setStyleSheet("background-color: rgba(255, 69, 58, 0.6); color: #fff; border: 1px solid rgba(255, 69, 58, 0.3);")
         remove_btn.clicked.connect(self._batch_chain_remove)
         action_row.addWidget(remove_btn)
 
@@ -23950,7 +24655,7 @@ Only respond with valid JSON, no other text. Example:
 
         proceed_btn = QtWidgets.QPushButton("Select Images...")
         proceed_btn.clicked.connect(dialog.accept)
-        proceed_btn.setStyleSheet("background-color: #4a6fa5;")
+        proceed_btn.setStyleSheet("background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4);")
         btn_layout.addWidget(proceed_btn)
 
         layout.addLayout(btn_layout)
@@ -24116,7 +24821,7 @@ Only respond with valid JSON, no other text. Example:
         btn_layout.addWidget(cancel_btn)
         ok_btn = QtWidgets.QPushButton("OK")
         ok_btn.clicked.connect(config_dialog.accept)
-        ok_btn.setStyleSheet("background-color: #4a6fa5;")
+        ok_btn.setStyleSheet("background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4);")
         btn_layout.addWidget(ok_btn)
         config_layout.addLayout(btn_layout)
 
@@ -24156,7 +24861,7 @@ Only respond with valid JSON, no other text. Example:
         path = self._batch_files[self._batch_index]
         self.canvas.set_2d_mode()
         self._light_container.hide()
-        self.mode_2d_btn.setEnabled(False)
+        self._update_mode_buttons("2d")
 
         # Save and temporarily clear bake chain so load_texture stores fresh original data
         saved_chain = list(self.canvas._bake_chain)
@@ -24527,7 +25232,7 @@ Only respond with valid JSON, no other text. Example:
 
         upscale_btn = QtWidgets.QPushButton("Upscale")
         upscale_btn.clicked.connect(dialog.accept)
-        upscale_btn.setStyleSheet("background-color: #2d5a2d;")
+        upscale_btn.setStyleSheet("background-color: rgba(10, 132, 255, 0.7); color: #fff; border: 1px solid rgba(10, 132, 255, 0.4);")
         btn_row.addWidget(upscale_btn)
         layout.addLayout(btn_row)
 
@@ -24594,7 +25299,7 @@ Only respond with valid JSON, no other text. Example:
 
 
 def main():
-    print("Starting Shader Studio v2...")
+    print("Starting Shade Studio v2...")
 
     app = QtWidgets.QApplication(sys.argv)
 

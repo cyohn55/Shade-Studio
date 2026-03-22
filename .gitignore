@@ -34,3 +34,4 @@ Thumbs.db
 .claude/stats-cache.json
 .claude/debug/
 .claude/todos/
+.venv/
